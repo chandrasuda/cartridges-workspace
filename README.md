@@ -54,7 +54,5 @@ python verl/examples/cartridge_distill/eval_longhealth.py
 | Metric | Value |
 |--------|-------|
 | KL loss (start → end) | 5.46 → 3.24 (41% reduction) |
-| Baseline accuracy | 30.0% |
-| Offline cartridge accuracy | 47.5% |
 | Training time | 53 min (40 steps, A100-80GB) |
 | Trainable params | 117M / 3.33B (3.5%) |
