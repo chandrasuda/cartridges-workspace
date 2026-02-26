@@ -1,6 +1,6 @@
 # Cartridges Workspace
 
-On-policy cartridge distillation: **veRL** + **Tokasaurus** + **Cartridges**.
+On-policy cartridge training: **veRL** + **Tokasaurus** + **Cartridges**.
 
 ## Repos
 
