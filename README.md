@@ -47,7 +47,7 @@ python verl/examples/cartridge_distill/eval_longhealth.py
 | `verl/workers/rollout/tokasaurus_rollout/` | NEW: `TokasaurusHttpServer`, `TokasaurusReplica`, `ServerAdapter`, Modal deploy |
 | `verl/trainer/ppo/ray_trainer.py` | Cartridge sync after each step |
 | `verl/experimental/agent_loop/agent_loop.py` | Prompt truncation fix |
-| `verl/examples/cartridge_distill/` | NEW: training config, data prep, eval, Modal train script |
+| `verl/examples/cartridge_distill/` | Created training config, data prep, eval, Modal train script |
 
 ## Results
 
@@ -58,7 +58,3 @@ python verl/examples/cartridge_distill/eval_longhealth.py
 | Offline cartridge accuracy | 47.5% |
 | Training time | 53 min (40 steps, A100-80GB) |
 | Trainable params | 117M / 3.33B (3.5%) |
-
-## Detailed write-up
-
-See [on-policy-cartridge-training/WRITEUP.md](https://github.com/chandrasuda/on-policy-cartridge-training/blob/main/WRITEUP.md) for the full technical narrative (33 issues encountered and solved).
