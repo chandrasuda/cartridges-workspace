@@ -1,0 +1,10 @@
+[submodule "verl"]
+	path = verl
+	url = https://github.com/chandrasuda/verl-cartridge.git
+[submodule "cartridges"]
+	path = cartridges
+	url = https://github.com/HazyResearch/cartridges.git
+[submodule "tokasaurus"]
+	path = tokasaurus
+	url = https://github.com/chandrasuda/tokasaurus.git
+	branch = geoff/cartridges
