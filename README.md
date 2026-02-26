@@ -55,6 +55,5 @@ python verl/examples/cartridge_distill/eval_longhealth.py
 |--------|-------|
 | KL loss (start → end) | 5.46 → 3.24 (41% reduction) |
 | Training time | 53 min (40 steps, A100-80GB) |
-| Trainable params | 117M / 3.33B (3.5%) |
-Cartridge = 2048 tokens × 28 layers × 2 (keys + values) × 8 KV heads × 128 head_dim × bfloat16
-          = ~117 million parameters
+| Trainable params | 2048 tokens × 28 layers × 2 (keys + values) × 8 KV heads × 128 head_dim × bfloat16 (117 million parameters) / 3.33B (3.5%) |
+
