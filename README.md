@@ -44,7 +44,7 @@ python verl/examples/cartridge_distill/eval_longhealth.py
 | `verl/workers/actor/dp_actor.py` | Cartridge forward pass (`seq_ids` instead of `attention_mask`) |
 | `verl/workers/rollout/replica.py` | Register `"tokasaurus"` in `RolloutReplicaRegistry` |
 | `verl/workers/rollout/base.py` | Register in `_ROLLOUT_REGISTRY` |
-| `verl/workers/rollout/tokasaurus_rollout/` | NEW: `TokasaurusHttpServer`, `TokasaurusReplica`, `ServerAdapter`, Modal deploy |
+| `verl/workers/rollout/tokasaurus_rollout/` | Created `TokasaurusHttpServer`, `TokasaurusReplica`, `ServerAdapter`, Modal deploy |
 | `verl/trainer/ppo/ray_trainer.py` | Cartridge sync after each step |
 | `verl/experimental/agent_loop/agent_loop.py` | Prompt truncation fix |
 | `verl/examples/cartridge_distill/` | Created training config, data prep, eval, Modal train script |
