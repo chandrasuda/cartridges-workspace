@@ -144,6 +144,21 @@ Rollout:         Tokasaurus (A100-40GB, Modal, 30min scaledown)
 | v7 | Batched teacher forward (8x micro-batch) |
 | v8 | Reduce teacher micro-batch to 4 (OOM fix) |
 | v9 | patient_id in extra_info, 3-strategy teacher lookup, pre-tokenize docs |
+| v10 | Add raw_prompt matching strategy, decode all tokens fallback, debug logging |
+
+### Parallel Eval Pipeline
+
+Training and eval run as separate Modal apps in parallel:
+
+```bash
+# Training (runs on A100-80GB, saves checkpoints every 10 steps)
+modal run verl/examples/cartridge_distill/modal_train.py
+
+# Eval (runs on A10G, polls for new checkpoints every 5 min)
+modal run verl/examples/cartridge_distill/eval_checkpoints.py --poll
+```
+
+Eval loads FlexLlama + each cartridge checkpoint directly (no Tokasaurus needed), runs 40 LongHealth questions, and saves results to `/results/onpolicy_eval.json` on the shared volume.
 
 ## Detailed write-up
 

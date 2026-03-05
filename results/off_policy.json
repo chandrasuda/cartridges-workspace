@@ -1,0 +1,115 @@
+{
+  "method": "off_policy",
+  "evals": [
+    {
+      "optimizer_step": 0,
+      "total_tokens": 0,
+      "total_packed_seqs": 0,
+      "scores": {
+        "score": 0.32
+      },
+      "num_eval_questions": 200,
+      "timestamp": 1772654931.2450917
+    },
+    {
+      "optimizer_step": 128,
+      "total_tokens": 8388608,
+      "total_packed_seqs": 4096,
+      "scores": {
+        "score": 0.295
+      },
+      "num_eval_questions": 200,
+      "timestamp": 1772656370.1946793
+    },
+    {
+      "optimizer_step": 256,
+      "total_tokens": 16777216,
+      "total_packed_seqs": 8192,
+      "scores": {
+        "score": 0.315
+      },
+      "num_eval_questions": 200,
+      "timestamp": 1772657733.4774945
+    },
+    {
+      "optimizer_step": 384,
+      "total_tokens": 25165824,
+      "total_packed_seqs": 12288,
+      "scores": {
+        "score": 0.42
+      },
+      "num_eval_questions": 200,
+      "timestamp": 1772659096.2958443
+    },
+    {
+      "optimizer_step": 512,
+      "total_tokens": 33554432,
+      "total_packed_seqs": 16384,
+      "scores": {
+        "score": 0.39
+      },
+      "num_eval_questions": 200,
+      "timestamp": 1772660455.3201005
+    },
+    {
+      "optimizer_step": 640,
+      "total_tokens": 41943040,
+      "total_packed_seqs": 20480,
+      "scores": {
+        "score": 0.465
+      },
+      "num_eval_questions": 200,
+      "timestamp": 1772661815.9448595
+    },
+    {
+      "optimizer_step": 768,
+      "total_tokens": 50331648,
+      "total_packed_seqs": 24576,
+      "scores": {
+        "score": 0.475
+      },
+      "num_eval_questions": 200,
+      "timestamp": 1772663148.8855057
+    },
+    {
+      "optimizer_step": 896,
+      "total_tokens": 58720256,
+      "total_packed_seqs": 28672,
+      "scores": {
+        "score": 0.48
+      },
+      "num_eval_questions": 200,
+      "timestamp": 1772664491.984683
+    },
+    {
+      "optimizer_step": 1024,
+      "total_tokens": 67108864,
+      "total_packed_seqs": 32768,
+      "scores": {
+        "score": 0.475
+      },
+      "num_eval_questions": 200,
+      "timestamp": 1772665846.2361157
+    },
+    {
+      "optimizer_step": 1152,
+      "total_tokens": 75497472,
+      "total_packed_seqs": 36864,
+      "scores": {
+        "score": 0.57
+      },
+      "num_eval_questions": 200,
+      "timestamp": 1772667192.6757908
+    },
+    {
+      "optimizer_step": 1280,
+      "total_tokens": 83886080,
+      "total_packed_seqs": 40960,
+      "scores": {
+        "score": 0.52
+      },
+      "num_eval_questions": 200,
+      "timestamp": 1772668541.9644754
+    }
+  ]
+}
