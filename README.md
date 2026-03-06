@@ -13,26 +13,30 @@ On-policy cartridge training: **veRL** + **Tokasaurus** + **Cartridges**.
 ## Quick Start
 
 ```bash
-# Clone with submodules
+# Clone with submodules (verl, cartridges, tokasaurus + data all in one)
 git clone --recurse-submodules https://github.com/chandrasuda/cartridges-workspace.git
 cd cartridges-workspace
 
-# Install
-pip install -e verl/ -e cartridges/
+# Install all packages
+pip install -e verl/ -e cartridges/ -e tokasaurus/
 
-# Deploy Tokasaurus on Modal
+# One-time Modal setup
 pip install modal && modal setup
 modal secret create huggingface-secret HF_TOKEN=hf_YOUR_TOKEN
-modal deploy verl/verl/workers/rollout/tokasaurus_rollout/modal_tokasaurus.py
 
-# Test the rollout
-python verl/verl/workers/rollout/tokasaurus_rollout/example_query.py
+# Deploy Tokasaurus inference server (keeps running, scales to zero when idle)
+modal deploy scripts/modal_tokasaurus.py
 
-# Prepare data + train (on Modal A100-80GB)
-modal run verl/examples/cartridge_distill/modal_train.py
+# Run off-policy baseline (paper replication, ~9 hours, ~$30)
+modal run --detach scripts/modal_offpolicy_train.py
 
-# Evaluate
-python verl/examples/cartridge_distill/eval_longhealth.py
+# Run on-policy training (with Tokasaurus rollout, ~24 hours, ~$100)
+modal run --detach scripts/modal_train.py
+
+# After runs finish — download results and plot
+modal volume get offpolicy-results eval_scores.json results/off_policy.json
+modal volume get onpolicy-results onpolicy_eval.json results/on_policy.json
+python scripts/plot_comparison.py --off results/off_policy.json --on results/on_policy.json --xaxis tokens
 ```
 
 ## What was changed in veRL
@@ -60,6 +64,93 @@ python verl/examples/cartridge_distill/eval_longhealth.py
 ## On-Policy Training: Issues & Fixes Log
 
 Detailed log of roadblocks encountered during on-policy training setup and how each was solved.
+
+---
+
+### Session 2 — Fair Comparison & Efficiency (March 2026)
+
+The core scientific requirement: the off-policy and on-policy runs must differ **only in the algorithm** (who generates the training trajectories). All hyperparameters, initialization, data distribution, and loss formulation must match.
+
+### 9. Loss Function Mismatch — Full-Vocab KL vs Top-k CE
+
+**Problem:** The paper's off-policy training uses `top_k_logits=20` — it only stores/matches the top-20 teacher logprobs per token position. Our on-policy was computing full-vocabulary KL divergence (128K logits per position). This is a confounding variable: off-policy sees a weaker but cheaper signal (20 values), on-policy sees a richer but more expensive signal (128K values).
+
+**Fix (`dp_actor.py`, `fsdp_workers.py`):**
+- Teacher now returns `ref_topk_logprobs` (bs, resp_len, 20) and `ref_topk_ids` (bs, resp_len, 20) alongside the old single-token logprob
+- Student forward extracts logprobs at teacher's top-20 positions via `log_softmax(logits).gather(-1, ref_topk_ids)`
+- Loss: `CE = -Σ p_teacher(x) * log p_student(x)` over top-20 — exactly the paper's formula
+- Falls back to single-token KL if top-k data not available (backward compat)
+
+### 10. Cartridge Initialization Mismatch — Pre-trained vs Fresh
+
+**Problem:** On-policy was loading `hazyresearch/cartridge-wauoq23f` (a pre-trained cartridge) while off-policy starts from `KVFromText(gradient.txt)`. This gave on-policy a massive head start — comparing an untrained cartridge vs a pre-trained one is not a fair algorithm comparison.
+
+**Fix (`fsdp_workers.py`, `modal_train.py`):** Removed `checkpoint_path` from the on-policy config. Also fixed a bug in the KVFromText initialization path — it was constructing the initializer incorrectly (`KVFromText(max_tokens=N)` instead of `KVFromText(KVFromText.Config(max_tokens=N))`) and not moving the model to GPU before the forward pass needed to initialize the KV cache.
+
+### 11. Training Prompt Distribution Mismatch
+
+**Problem:** On-policy was training on the 92 LongHealth eval questions, while off-policy trains on 196K diverse synthesized QA conversations (structuring, summarization, creative, use_case, etc.). Training on the eval set is data contamination; training on a different distribution is a confound.
+
+**Fix (`prepare_data_local.py`):** Rewrote data prep to extract only the user-turn prompts from the paper's 196K HF conversations (`hazyresearch/m07d11_longhealth_synthesize_llama-3.2-3b_p10_n65536-{0,1,2}`). Both methods now train on the same 110K unique questions, extracted from the same 3 HF shards. Only 112K of 196K were matched (43% were generic questions without patient names in the user turn; filtered to keep only patient-identified prompts).
+
+### 12. Data Shuffling Breaks Patient Grouping
+
+**Problem:** veRL's default is `data.shuffle=True` (RandomSampler). This randomizes row order regardless of how the parquet is sorted — our patient-sorted data would be shuffled into mixed-patient batches, breaking the patient-grouping optimization.
+
+**Fix:** Added `data.shuffle=False` to the training config → uses `SequentialSampler` → reads rows in parquet order → patient-sorted data means consecutive 32-row windows are guaranteed same-patient.
+
+**Verification:** 3441/3441 (100%) of 32-row windows are same-patient after sorting + truncating each patient to nearest multiple of 32 (dropped 210 rows = 0.2% of data).
+
+### 13. Batch Size Mismatch
+
+**Problem:** Off-policy uses `global_batch_size=32` (32 packed sequences per optimizer step). On-policy was using `train_batch_size=8`. This means off-policy computes gradients over 4× more samples per step — the gradient estimates are smoother and training is more stable.
+
+**Fix:** Changed on-policy to `data.train_batch_size=32` and `ppo_mini_batch_size=32`. This is equivalent because veRL handles gradient accumulation internally.
+
+### 14. Serial Teacher Forward — O(batch × doc_len) Tokens
+
+**Problem:** With 32 samples per step and ~12K document tokens per patient, the teacher was running 32 independent forward passes of `[12K docs + ~500 tokens]` each = 400K tokens total. This dominated per-step wall time.
+
+**Root cause:** Each sample needed different-length sequences so they couldn't be trivially batched (well, they could be padded, which the code now does). But the deeper insight: since all 32 samples are from the same patient (patient-grouped batches), the 12K document tokens are **identical across all samples**.
+
+**Fix (`fsdp_workers.py` — prefix KV optimization):**
+1. Detect shared patient: check if all 32 samples share the same `patient_id`
+2. If yes, run one doc-only forward → `past_key_values` (the doc KV cache, shape: `[1, n_heads, 12K, head_dim]`)
+3. Expand the doc KV to micro-batch size (`DynamicCache.expand()`) — read-only, no copy needed with `use_cache=False`
+4. For each micro-batch of 4: forward only `[prompt + response]` (~500 tokens) with `past_key_values=doc_kv_expanded`
+5. Position IDs start at `doc_len` to correctly account for the prefix
+
+**Token count:** 12K (doc, once) + 32 × 500 (prompts+responses) = 28K total vs 32 × 12.5K = 400K. **~14× reduction.**
+
+### 15. Serial Tokasaurus Rollout — One Request at a Time
+
+**Problem:** `agent.num_workers=1` sent rollout requests to Tokasaurus sequentially: prompt 1 → wait → prompt 2 → wait → ... 32 serial HTTP calls × ~600ms each = ~20 seconds just for rollout dispatch.
+
+**Fix:** Set `actor_rollout_ref.rollout.agent.num_workers=8`. veRL's `AsyncLLMServerManager` sends 8 concurrent requests via asyncio. Tokasaurus's continuous batching engine picks them up and processes them together on the GPU → effectively the same throughput as batched generation.
+
+### 16. Git Large File Rejection
+
+**Problem:** The raw HF shard parquets (`data/hf_shards/*/`) — each 92-113 MB — were accidentally staged and committed to git. GitHub rejected the push with `GH001: Large files detected (>100MB)`.
+
+**Fix:** `git rm -r --cached data/hf_shards/` to unstage, then `git filter-branch` to rewrite the entire git history removing the large files from all previous commits, then `git push --force`. Added `data/hf_shards/` to `.gitignore`.
+
+**Lesson:** Add large binary file patterns to `.gitignore` before creating them.
+
+### 17. Workspace Clone Strategy — Three Separate Clones → One
+
+**Problem:** Modal image build was cloning `HazyResearch/cartridges`, `chandrasuda/verl-cartridge`, and `chandrasuda/cartridges-workspace` separately. Three clone operations, three `pip install -e` steps, potential version drift between what's locally tested vs what Modal runs.
+
+**Fix:** Since `cartridges-workspace` already defines `verl`, `cartridges`, and `tokasaurus` as git submodules, a single clone with `--recurse-submodules` gets everything in the exact same state as the local workspace:
+```bash
+git clone --recurse-submodules --depth 1 \
+  https://github.com/chandrasuda/cartridges-workspace.git /opt/workspace
+pip install -e /opt/workspace/cartridges \
+         -e /opt/workspace/verl \
+         -e /opt/workspace/tokasaurus
+```
+Data files (`data/on_policy/*.parquet`) come along for free.
+
+---
 
 ### 1. Data Preparation — Off-Policy vs On-Policy Format
 
