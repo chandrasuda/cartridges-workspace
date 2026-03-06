@@ -84,13 +84,18 @@ def train():
 
     # Clean old checkpoints from previous runs to avoid eval pollution
     ckpt_dir = "/results/onpolicy/cartridge_checkpoints"
-    if os.path.exists(ckpt_dir):
-        old_files = [f for f in os.listdir(ckpt_dir) if f.endswith(".pt")]
-        if old_files:
-            print(f"⚠ Cleaning {len(old_files)} old checkpoints from previous run")
-            shutil.rmtree(ckpt_dir)
-            os.makedirs(ckpt_dir, exist_ok=True)
-            results_volume.commit()
+    try:
+        if os.path.exists(ckpt_dir):
+            old_files = [f for f in os.listdir(ckpt_dir) if f.endswith(".pt")]
+            if old_files:
+                print(f"⚠ Cleaning {len(old_files)} old checkpoints from previous run")
+                for f in old_files:
+                    os.remove(os.path.join(ckpt_dir, f))
+                results_volume.commit()
+                print(f"✓ Cleaned checkpoint directory")
+    except Exception as e:
+        print(f"⚠ Cleanup failed (non-fatal): {e}")
+    os.makedirs(ckpt_dir, exist_ok=True)
 
     # Verify GPU
     try:
