@@ -168,6 +168,17 @@ pip install -e /opt/workspace/cartridges \
 ```
 Data files (`data/on_policy/*.parquet`) come along for free.
 
+### 19. Old Checkpoints Pollute Eval — 0/40 on Every Step
+
+**Problem:** The results volume persists between Modal runs. Old 2048-token checkpoints from previous (broken) runs sat alongside new 512-token checkpoints. The eval evaluated all of them. All old checkpoints generated degenerate output (`" " " " " " " " " "`) → 0/40 accuracy on every step except the current run's step 2.
+
+**Root cause:** (a) No cleanup of the checkpoint directory between runs. (b) `sorted(glob)` sorted alphabetically — "cache-step10" before "cache-step2" — so the eval order was scrambled. (c) The eval summary used wrong dict keys (`e["step"]` instead of `e["optimizer_step"]`).
+
+**Fix (`modal_train.py`):**
+1. Clean `/results/onpolicy/cartridge_checkpoints/` at the start of each run
+2. Sort checkpoints numerically: `ckpts.sort(key=lambda p: int(re.search(r"step(\d+)", p).group(1)))`
+3. Fix eval summary to use correct keys from the results dict
+
 ---
 
 ### 1. Data Preparation — Off-Policy vs On-Policy Format
