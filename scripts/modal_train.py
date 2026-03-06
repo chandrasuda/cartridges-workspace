@@ -15,7 +15,7 @@ GPU = "A100-80GB"
 
 # Build image: clone cartridges-workspace with all submodules (verl, cartridges, tokasaurus)
 # Cache bust: bump to force re-clone when any repo changes
-WORKSPACE_VERSION = "v18-clean-volume-fix"
+WORKSPACE_VERSION = "v19-300steps"
 
 image = (
     modal.Image.from_registry(
@@ -203,7 +203,7 @@ def train():
         "+trainer.cartridge_save_freq=10",  # Save cache .pt every 10 steps so we can eval early
         "trainer.default_local_dir=/results/onpolicy",
         "trainer.total_epochs=100",  # Large — actual limit is total_training_steps below
-        "trainer.total_training_steps=2",  # 2-step run: eval at step 0 and after step 2
+        "trainer.total_training_steps=300",
         "trainer.val_before_train=False",
     ]
 
