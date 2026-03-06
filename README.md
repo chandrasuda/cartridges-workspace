@@ -128,7 +128,25 @@ The core scientific requirement: the off-policy and on-policy runs must differ *
 
 **Fix:** Set `actor_rollout_ref.rollout.agent.num_workers=8`. veRL's `AsyncLLMServerManager` sends 8 concurrent requests via asyncio. Tokasaurus's continuous batching engine picks them up and processes them together on the GPU → effectively the same throughput as batched generation.
 
-### 16. Git Large File Rejection
+### 16. Serial Student Forward — Per-Sample Loop in Actor
+
+**Problem:** `_forward_micro_batch_cartridge()` ran a separate forward pass for each sample in the micro-batch (loop of 32). Step 1 timings showed `timing_s/old_log_prob: 148s` and `timing_s/update_actor: 169s` — the actor was the dominant bottleneck, not the teacher.
+
+**Root cause:** FlexLlamaForCausalLM uses `seq_ids` instead of `attention_mask`. The original code assigned `seq_id=0` to every sample and called `cache.clear()` between each — inherently serial.
+
+**Key insight:** FlexAttention's block-diagonal attention mask already supports packing natively. Cache tokens use `seq_id=-1` (global, attended by all sequences). Real tokens only attend to tokens with the same `seq_id`. So assigning each sample a different `seq_id` (0, 1, 2, ..., 31) and concatenating into one packed sequence gives correct attention without padding.
+
+**Fix (`dp_actor.py`):**
+1. Extract valid tokens from each sample (remove padding)
+2. Concatenate all samples into a single 1D packed sequence
+3. Create `seq_ids = [0,0,...,0, 1,1,...,1, ..., 31,31,...,31]`
+4. Position IDs restart from 0 for each sample
+5. One `cache.clear()` + one forward pass through the entire packed sequence
+6. Slice the output logits by sample offsets to extract per-sample log-probs
+
+**Result:** 32 serial forward passes → 1 packed forward pass. Applies to both `compute_log_prob` (old_log_prob) and `update_policy` (training forward).
+
+### 17. Git Large File Rejection
 
 **Problem:** The raw HF shard parquets (`data/hf_shards/*/`) — each 92-113 MB — were accidentally staged and committed to git. GitHub rejected the push with `GH001: Large files detected (>100MB)`.
 
@@ -136,7 +154,7 @@ The core scientific requirement: the off-policy and on-policy runs must differ *
 
 **Lesson:** Add large binary file patterns to `.gitignore` before creating them.
 
-### 17. Workspace Clone Strategy — Three Separate Clones → One
+### 18. Workspace Clone Strategy — Three Separate Clones → One
 
 **Problem:** Modal image build was cloning `HazyResearch/cartridges`, `chandrasuda/verl-cartridge`, and `chandrasuda/cartridges-workspace` separately. Three clone operations, three `pip install -e` steps, potential version drift between what's locally tested vs what Modal runs.
 
