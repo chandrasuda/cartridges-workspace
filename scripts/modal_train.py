@@ -36,11 +36,15 @@ image = (
         "git clone https://github.com/HazyResearch/cartridges.git /opt/cartridges && pip install -e /opt/cartridges"
     )
     # Install veRL from our fork (has cartridge support baked in)
-    # Cache bust: change the echo to force re-clone on code changes
-    .run_commands("echo 'verl-fork-v14-2step-eval'")
+    # Cache bust: bump version string to force re-clone when code changes
+    .run_commands("echo 'verl-fork-v15-topk-prefixkv-patientbatch'")
     .run_commands(
         "git clone https://github.com/chandrasuda/verl-cartridge.git /opt/verl-cartridge "
         "&& pip install -e /opt/verl-cartridge"
+    )
+    # Clone workspace for training data (data/on_policy/*.parquet)
+    .run_commands(
+        "git clone --depth 1 https://github.com/chandrasuda/cartridges-workspace.git /opt/workspace"
     )
     # Install tokasaurus
     .run_commands(
@@ -63,7 +67,6 @@ image = (
 )
 
 results_volume = modal.Volume.from_name("onpolicy-results", create_if_missing=True)
-data_volume = modal.Volume.from_name("training-data")
 app = modal.App("onpolicy-training", image=image)
 
 
@@ -74,7 +77,7 @@ app = modal.App("onpolicy-training", image=image)
     min_containers=0,
     max_containers=1,
     scaledown_window=600,
-    volumes={"/results": results_volume, "/data": data_volume},
+    volumes={"/results": results_volume},
 )
 def train():
     """Run cartridge distillation training."""
@@ -96,12 +99,15 @@ def train():
     from verl.workers.config.actor import CartridgeConfig
     print(f"✓ veRL fork installed with CartridgeConfig")
 
-    # Verify pre-processed data from volume
-    train_parquet = "/data/cartridge_distill/train.parquet"
-    val_parquet = "/data/cartridge_distill/val.parquet"
-    assert os.path.exists(train_parquet), f"Missing {train_parquet} — upload to 'training-data' volume"
-    assert os.path.exists(val_parquet), f"Missing {val_parquet} — upload to 'training-data' volume"
-    print(f"✓ Training data: {train_parquet}")
+    # Data from git clone of chandrasuda/cartridges-workspace
+    train_parquet = "/opt/workspace/data/on_policy/train.parquet"
+    val_parquet = "/opt/workspace/data/on_policy/val.parquet"
+    assert os.path.exists(train_parquet), f"Missing {train_parquet}"
+    assert os.path.exists(val_parquet), f"Missing {val_parquet}"
+    import pandas as pd
+    train_df = pd.read_parquet(train_parquet)
+    print(f"✓ Training data: {len(train_df):,} rows, {train_df.patient_id.nunique()} patients — {train_parquet}")
+    print(f"  Patient counts: {dict(train_df.patient_id.value_counts())}")
     print(f"✓ Validation data: {val_parquet}")
 
     # Pre-download LongHealth data for the teacher
@@ -126,8 +132,8 @@ def train():
         sys.executable, "-m", "verl.trainer.main_ppo",
         "algorithm.adv_estimator=grpo",
         #
-        "data.train_files=/data/cartridge_distill/train.parquet",
-        "data.val_files=/data/cartridge_distill/val.parquet",
+        f"data.train_files={train_parquet}",
+        f"data.val_files={val_parquet}",
         "data.train_batch_size=32",
         "data.max_prompt_length=512",
         "data.max_response_length=512",
@@ -190,9 +196,15 @@ def train():
     ]
 
     print(f"\n{'='*60}")
-    print("Starting on-policy cartridge distillation training")
-    print(f"Tokasaurus URL: {TOKASAURUS_URL}")
-    print(f"GPU: {GPU}")
+    print("ON-POLICY CARTRIDGE DISTILLATION")
+    print(f"  Tokasaurus URL : {TOKASAURUS_URL}")
+    print(f"  GPU            : {GPU}")
+    print(f"  Cartridge size : 512 tokens")
+    print(f"  Batch size     : 32 (patient-grouped, same patient per batch)")
+    print(f"  Loss           : top-k CE (k=20), teacher prefix KV opt")
+    print(f"  Rollout        : 8 concurrent workers")
+    print(f"  Data           : {len(train_df):,} prompts, {train_df.patient_id.nunique()} patients")
+    print(f"  Save every     : 10 steps  |  Eval every: 10 steps")
     print(f"{'='*60}\n")
 
     import time as _time
@@ -335,7 +347,10 @@ def _eval_all_checkpoints(ckpt_dir: str):
     flex_model = FlexLlamaForCausalLM.from_pretrained(MODEL, torch_dtype=torch.bfloat16).cuda().eval()
     print(f"  ✓ FlexLlama loaded")
 
+    # Format matches off_policy.json so plot_comparison.py can read both
     results = {
+        "method": "on_policy",
+        "config": {"cartridge_tokens": 512, "model": "Llama-3.2-3B", "loss": "topk_ce_k20"},
         "baseline": {"correct": correct_bl, "total": len(eval_qs), "accuracy": baseline_acc},
         "evals": [],
     }
@@ -404,8 +419,21 @@ def _eval_all_checkpoints(ckpt_dir: str):
                     correct += 1
 
             acc = correct / len(eval_qs) * 100
-            print(f"  Step {step}: {correct}/{len(eval_qs)} ({acc:.1f}%)")
-            results["evals"].append({"step": step, "correct": correct, "total": len(eval_qs), "accuracy": acc})
+            # total_tokens: step × batch_size × avg_response_len (~350 tokens)
+            total_tokens = step * 32 * 350
+            print(f"  Step {step} ({total_tokens:,} tokens): {correct}/{len(eval_qs)} ({acc:.1f}%)")
+            results["evals"].append({
+                "optimizer_step": step,
+                "total_tokens": total_tokens,
+                "scores": {"score": round(acc / 100, 4)},
+                "num_eval_questions": len(eval_qs),
+                "correct": correct,
+            })
+            # Save incrementally after each checkpoint so results persist if interrupted
+            import time as _t
+            with open("/results/onpolicy_eval.json", "w") as _f:
+                json.dump(results, _f, indent=2)
+            print(f"  ✓ Saved incrementally to /results/onpolicy_eval.json")
 
             del cache
             torch.cuda.empty_cache()
