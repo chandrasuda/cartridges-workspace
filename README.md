@@ -1,6 +1,6 @@
 # Cartridges Workspace
 
-On-policy cartridge distillation: **veRL** + **Tokasaurus** + **Cartridges**.
+On-policy cartridge training: **veRL** + **Tokasaurus** + **Cartridges**.
 
 ## Repos
 
@@ -44,20 +44,18 @@ python verl/examples/cartridge_distill/eval_longhealth.py
 | `verl/workers/actor/dp_actor.py` | Cartridge forward pass (`seq_ids` instead of `attention_mask`) |
 | `verl/workers/rollout/replica.py` | Register `"tokasaurus"` in `RolloutReplicaRegistry` |
 | `verl/workers/rollout/base.py` | Register in `_ROLLOUT_REGISTRY` |
-| `verl/workers/rollout/tokasaurus_rollout/` | NEW: `TokasaurusHttpServer`, `TokasaurusReplica`, `ServerAdapter`, Modal deploy |
+| `verl/workers/rollout/tokasaurus_rollout/` | Created `TokasaurusHttpServer`, `TokasaurusReplica`, `ServerAdapter`, Modal deploy |
 | `verl/trainer/ppo/ray_trainer.py` | Cartridge sync after each step |
 | `verl/experimental/agent_loop/agent_loop.py` | Prompt truncation fix |
-| `verl/examples/cartridge_distill/` | NEW: training config, data prep, eval, Modal train script |
+| `verl/examples/cartridge_distill/` | Created training config, data prep, eval, Modal train script |
 
 ## Results
 
 | Metric | Value |
 |--------|-------|
 | KL loss (start → end) | 5.46 → 3.24 (41% reduction) |
-| Baseline accuracy | 30.0% |
-| Offline cartridge accuracy | 47.5% |
 | Training time | 53 min (40 steps, A100-80GB) |
-| Trainable params | 117M / 3.33B (3.5%) |
+| Trainable params | 2048 tokens × 28 layers × 2 (keys + values) × 8 KV heads × 128 head_dim × bfloat16 (117 million parameters) / 3.33B (3.5%) |
 
 ## On-Policy Training: Issues & Fixes Log
 
