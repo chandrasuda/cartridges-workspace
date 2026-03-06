@@ -80,6 +80,17 @@ def train():
     import subprocess
     import os
     import sys
+    import shutil
+
+    # Clean old checkpoints from previous runs to avoid eval pollution
+    ckpt_dir = "/results/onpolicy/cartridge_checkpoints"
+    if os.path.exists(ckpt_dir):
+        old_files = [f for f in os.listdir(ckpt_dir) if f.endswith(".pt")]
+        if old_files:
+            print(f"⚠ Cleaning {len(old_files)} old checkpoints from previous run")
+            shutil.rmtree(ckpt_dir)
+            os.makedirs(ckpt_dir, exist_ok=True)
+            results_volume.commit()
 
     # Verify GPU
     try:
@@ -221,12 +232,14 @@ def train():
     print("=" * 60)
 
     # Copy all cartridge checkpoints to volume
-    import shutil, glob
+    import shutil, glob, re as _re
     ckpt_dir = "/results/onpolicy/cartridge_checkpoints"
     if os.path.exists(ckpt_dir):
         ckpts = glob.glob(os.path.join(ckpt_dir, "cache-step*.pt"))
+        # Sort numerically by step number, not alphabetically
+        ckpts.sort(key=lambda p: int(_re.search(r"step(\d+)", p).group(1)))
         print(f"✓ Found {len(ckpts)} cartridge checkpoints")
-        for c in sorted(ckpts):
+        for c in ckpts:
             print(f"  {os.path.basename(c)}")
     else:
         print(f"⚠ No checkpoint dir at {ckpt_dir}")
@@ -274,7 +287,9 @@ def _eval_all_checkpoints(ckpt_dir: str):
     NUM_EVAL = 40
     MODEL = "meta-llama/Llama-3.2-3B-Instruct"
 
-    ckpts = sorted(glob.glob(os.path.join(ckpt_dir, "cache-step*.pt")))
+    ckpts = glob.glob(os.path.join(ckpt_dir, "cache-step*.pt"))
+    # Sort numerically by step number (cache-step2 before cache-step10)
+    ckpts.sort(key=lambda p: int(re.search(r"step(\d+)", p).group(1)))
     if not ckpts:
         print("[eval] No checkpoints found, skipping eval")
         return
@@ -452,8 +467,10 @@ def _eval_all_checkpoints(ckpt_dir: str):
     print("EVAL SUMMARY")
     print(f"{'='*60}")
     print(f"  Baseline:  {baseline_acc:.1f}%")
-    for e in sorted(results["evals"], key=lambda x: x["step"]):
-        print(f"  Step {e['step']:>4}:  {e['accuracy']:.1f}%")
+    for e in sorted(results["evals"], key=lambda x: x["optimizer_step"]):
+        step = e["optimizer_step"]
+        acc = e["correct"] / e["num_eval_questions"] * 100
+        print(f"  Step {step:>4}:  {acc:.1f}%  ({e['correct']}/{e['num_eval_questions']})")
     print(f"{'='*60}")
 
 
