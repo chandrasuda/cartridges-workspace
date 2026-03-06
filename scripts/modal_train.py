@@ -13,7 +13,10 @@ import modal
 TOKASAURUS_URL = "https://kiran1234c--tokasaurus-cartridge-server-serve.modal.run"
 GPU = "A100-80GB"
 
-# Build image with veRL + cartridges + all patches applied
+# Build image: clone cartridges-workspace with all submodules (verl, cartridges, tokasaurus)
+# Cache bust: bump to force re-clone when any repo changes
+WORKSPACE_VERSION = "v16-single-clone"
+
 image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.4.1-devel-ubuntu22.04",
@@ -22,33 +25,26 @@ image = (
     .apt_install("git", "patch")
     .env({
         "CUDA_HOME": "/usr/local/cuda",
-        "CARTRIDGES_DIR": "/opt/cartridges",
+        "CARTRIDGES_DIR": "/opt/workspace/cartridges",
         "CARTRIDGES_OUTPUT_DIR": "/tmp/cartridge_output",
     })
     .pip_install("torch==2.6.0", "packaging", "numpy")
     .run_commands(
-        # Pre-built wheel from GitHub — avoids compiling from source entirely
+        # Pre-built flash-attn wheel — avoids compiling from source
         "pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp312-cp312-linux_x86_64.whl",
         "pip install flashinfer-python==0.2.0.post2 --extra-index-url https://flashinfer.ai/whl/cu124/torch2.6/",
     )
-    # Install cartridges — clone and install in editable mode to ensure all subpackages are included
+    # Clone workspace + all submodules in one shot
+    .run_commands(f"echo '{WORKSPACE_VERSION}'")
     .run_commands(
-        "git clone https://github.com/HazyResearch/cartridges.git /opt/cartridges && pip install -e /opt/cartridges"
+        "git clone --recurse-submodules --depth 1 "
+        "https://github.com/chandrasuda/cartridges-workspace.git /opt/workspace"
     )
-    # Install veRL from our fork (has cartridge support baked in)
-    # Cache bust: bump version string to force re-clone when code changes
-    .run_commands("echo 'verl-fork-v15-topk-prefixkv-patientbatch'")
+    # Install all three packages in editable mode
     .run_commands(
-        "git clone https://github.com/chandrasuda/verl-cartridge.git /opt/verl-cartridge "
-        "&& pip install -e /opt/verl-cartridge"
-    )
-    # Clone workspace for training data (data/on_policy/*.parquet)
-    .run_commands(
-        "git clone --depth 1 https://github.com/chandrasuda/cartridges-workspace.git /opt/workspace"
-    )
-    # Install tokasaurus
-    .run_commands(
-        "pip install git+https://github.com/chandrasuda/tokasaurus.git@geoff/cartridges"
+        "pip install -e /opt/workspace/cartridges "
+        "&& pip install -e /opt/workspace/verl "
+        "&& pip install -e /opt/workspace/tokasaurus"
     )
     .pip_install("requests")
     .pip_install(
@@ -99,9 +95,9 @@ def train():
     from verl.workers.config.actor import CartridgeConfig
     print(f"✓ veRL fork installed with CartridgeConfig")
 
-    # Data from git clone of chandrasuda/cartridges-workspace
+    # Data shipped with the workspace repo
     train_parquet = "/opt/workspace/data/on_policy/train.parquet"
-    val_parquet = "/opt/workspace/data/on_policy/val.parquet"
+    val_parquet   = "/opt/workspace/data/on_policy/val.parquet"
     assert os.path.exists(train_parquet), f"Missing {train_parquet}"
     assert os.path.exists(val_parquet), f"Missing {val_parquet}"
     import pandas as pd
