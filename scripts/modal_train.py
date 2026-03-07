@@ -203,7 +203,7 @@ def train():
         "+trainer.cartridge_save_freq=50",  # Save cache .pt every 50 steps
         "trainer.default_local_dir=/results/onpolicy",
         "trainer.total_epochs=100",  # Large — actual limit is total_training_steps below
-        "trainer.total_training_steps=300",
+        "trainer.total_training_steps=40",  # Quick test — extend to 300+ once validated
         "trainer.val_before_train=False",
     ]
 
