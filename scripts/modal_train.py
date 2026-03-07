@@ -15,7 +15,7 @@ GPU = "A100-80GB"
 
 # Build image: clone cartridges-workspace with all submodules (verl, cartridges, tokasaurus)
 # Cache bust: bump to force re-clone when any repo changes
-WORKSPACE_VERSION = "v19-300steps"
+WORKSPACE_VERSION = "v20-skip-old-lp-32workers"
 
 image = (
     modal.Image.from_registry(
@@ -179,7 +179,7 @@ def train():
         "actor_rollout_ref.rollout.temperature=0.7",
         "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
         "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4",
-        "actor_rollout_ref.rollout.agent.num_workers=8",  # 8 concurrent Tokasaurus requests → continuous batching
+        "actor_rollout_ref.rollout.agent.num_workers=32",  # all 32 requests concurrent → Tokasaurus batches them
         f"+actor_rollout_ref.rollout.custom.tokasaurus_url={TOKASAURUS_URL}",
         # Cartridge synced from actor after each step (no pre-loaded cartridge)
         "+actor_rollout_ref.rollout.custom.cartridges=[]",
@@ -200,7 +200,7 @@ def train():
         "trainer.nnodes=1",
         "trainer.save_freq=-1",  # Disable full-model checkpointing (CacheAndModel missing .config)
         "trainer.test_freq=-1",  # Disable reward-based test (dummy reward = useless)
-        "+trainer.cartridge_save_freq=10",  # Save cache .pt every 10 steps so we can eval early
+        "+trainer.cartridge_save_freq=50",  # Save cache .pt every 50 steps
         "trainer.default_local_dir=/results/onpolicy",
         "trainer.total_epochs=100",  # Large — actual limit is total_training_steps below
         "trainer.total_training_steps=300",
