@@ -179,6 +179,14 @@ Data files (`data/on_policy/*.parquet`) come along for free.
 2. Sort checkpoints numerically: `ckpts.sort(key=lambda p: int(re.search(r"step(\d+)", p).group(1)))`
 3. Fix eval summary to use correct keys from the results dict
 
+### 20. Wasted old_log_prob Forward Pass — 14s/step for Nothing
+
+**Problem:** veRL's PPO loop calls `compute_log_prob()` to get `old_log_probs` before `update_policy()`. This is a full student forward pass (~14s). But with `ppo_epochs=1` and `ppo_mini_batch_size=batch_size`, `update_policy` detects `on_policy=True` and replaces old_log_probs with `log_prob.detach()` from the training forward pass. The separately computed old_log_probs are thrown away.
+
+**Why it exists:** PPO with multiple epochs (`ppo_epochs>1`) needs the "old" policy's log probs as a stable reference for the importance sampling ratio `π_new(a|s) / π_old(a|s)`. With one epoch, old = new, so the ratio is always 1.0 and the clipping never activates.
+
+**Fix (`ray_trainer.py`):** Detect cartridge distillation mode (`cartridge.enabled=True` + `ppo_epochs=1`). When true, inject zeros for `old_log_probs` and skip the forward pass entirely. `update_policy` overwrites them anyway.
+
 ---
 
 ### 1. Data Preparation — Off-Policy vs On-Policy Format
