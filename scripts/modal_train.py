@@ -15,7 +15,7 @@ GPU = "A100-80GB"
 
 # Build image: clone cartridges-workspace with all submodules (verl, cartridges, tokasaurus)
 # Cache bust: bump to force re-clone when any repo changes
-WORKSPACE_VERSION = "v20-skip-old-lp-32workers"
+WORKSPACE_VERSION = "v21-fix-torch-import"
 
 image = (
     modal.Image.from_registry(
