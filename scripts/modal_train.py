@@ -15,7 +15,7 @@ GPU = "A100-80GB"
 
 # Build image: clone cartridges-workspace with all submodules (verl, cartridges, tokasaurus)
 # Cache bust: bump to force re-clone when any repo changes
-WORKSPACE_VERSION = "v22-fix-torch-scope"
+WORKSPACE_VERSION = "v23-fixsave-fullrun-eval50"
 
 image = (
     modal.Image.from_registry(
@@ -200,10 +200,10 @@ def train():
         "trainer.nnodes=1",
         "trainer.save_freq=-1",  # Disable full-model checkpointing (CacheAndModel missing .config)
         "trainer.test_freq=-1",  # Disable reward-based test (dummy reward = useless)
-        "+trainer.cartridge_save_freq=50",  # Save cache .pt every 50 steps
+        "+trainer.cartridge_save_freq=50",  # Save cache .pt every 50 steps for eval
         "trainer.default_local_dir=/results/onpolicy",
-        "trainer.total_epochs=100",  # Large — actual limit is total_training_steps below
-        "trainer.total_training_steps=40",  # Quick test — extend to 300+ once validated
+        "trainer.total_epochs=100",  # Large ceiling — real limit is total_training_steps
+        "trainer.total_training_steps=-1",  # No step limit — run full epochs
         "trainer.val_before_train=False",
     ]
 
