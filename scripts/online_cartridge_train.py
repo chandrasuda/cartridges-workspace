@@ -496,8 +496,10 @@ def train(
         ckpt_path = os.path.join(ckpt_dir, f"cache-step{step}.pt")
         cache.save(ckpt_path)
 
-        # Update cartridge for next step's generation
-        cartridges = [{"id": ckpt_path, "source": "local", "force_redownload": True}]
+        # Note: cartridge sync to remote Tokasaurus requires shared storage.
+        # For local training, we generate without cartridge (base model).
+        # On Modal (same container), local paths would work.
+        # cartridges = [{"id": ckpt_path, "source": "local", "force_redownload": True}]
 
         # ---- 6. Eval ----
         if eval_every > 0 and step % eval_every == 0:
