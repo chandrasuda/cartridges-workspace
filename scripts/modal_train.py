@@ -15,7 +15,7 @@ GPU = "A100-80GB"
 
 # Build image: clone cartridges-workspace with all submodules (verl, cartridges, tokasaurus)
 # Cache bust: bump to force re-clone when any repo changes
-WORKSPACE_VERSION = "v27-eval-subprocess-for-cuda"
+WORKSPACE_VERSION = "v28-debug-eval-every-step"
 
 image = (
     modal.Image.from_registry(
@@ -200,7 +200,7 @@ def train():
         "trainer.nnodes=1",
         "trainer.save_freq=-1",  # Disable full-model checkpointing (CacheAndModel missing .config)
         "trainer.test_freq=-1",  # Disable reward-based test (dummy reward = useless)
-        "+trainer.cartridge_save_freq=50",  # Save cache .pt every 50 steps for eval
+        "+trainer.cartridge_save_freq=1",  # Save+eval every step for debugging
         "trainer.default_local_dir=/results/onpolicy",
         "trainer.total_epochs=100",  # High ceiling
         "trainer.total_training_steps=500",  # ~500 steps ≈ 37 hours ≈ $140 on A100
@@ -216,7 +216,7 @@ def train():
     print(f"  Loss           : top-k CE (k=20), teacher prefix KV opt")
     print(f"  Rollout        : 8 concurrent workers")
     print(f"  Data           : {len(train_df):,} prompts, {train_df.patient_id.nunique()} patients")
-    print(f"  Save every     : 50 steps  |  Eval every: 50 steps")
+    print(f"  Save every     : 1 step   |  Eval every: 1 step (DEBUG)")
     print(f"{'='*60}\n")
 
     import time as _time
