@@ -62,7 +62,13 @@ async def _generate_one(session, url, prompt_ids, max_tokens, temperature, cartr
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    tokens = [int(t) for t in data["choices"][0]["text_token_ids"]]
+                    # Token IDs are in system_fingerprint.completion_ids[0]
+                    import json as _json
+                    fp = data.get("system_fingerprint", "{}")
+                    if isinstance(fp, str):
+                        fp = _json.loads(fp)
+                    completion_ids = fp.get("completion_ids", [[]])[0]
+                    tokens = [int(t) for t in completion_ids]
                     return tokens
                 else:
                     text = await resp.text()
@@ -101,10 +107,12 @@ def compute_teacher_topk(
     in the same format as off-policy training data.
     """
     device = next(model.parameters()).device
+    device_str = str(device) if isinstance(device, torch.device) else device
 
     # Compute doc KV cache once
     doc_t = torch.tensor(doc_ids, dtype=torch.long, device=device).unsqueeze(0)
-    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+    use_autocast = device_str.startswith("cuda")
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_autocast):
         doc_out = model(doc_t, use_cache=True)
     doc_kv = doc_out.past_key_values
     doc_len = len(doc_ids)
@@ -149,14 +157,26 @@ def compute_teacher_topk(
         # Expand doc KV for this micro-batch
         from transformers.cache_utils import DynamicCache
         expanded_kv = DynamicCache()
-        for k, v in zip(doc_kv.key_cache, doc_kv.value_cache):
-            expanded_kv.key_cache.append(k.expand(mb_size, -1, -1, -1).contiguous())
-            expanded_kv.value_cache.append(v.expand(mb_size, -1, -1, -1).contiguous())
+        # Handle both old (.key_cache list) and new (.layers[i].keys) cache APIs
+        try:
+            kv_pairs = list(zip(doc_kv.key_cache, doc_kv.value_cache))
+        except AttributeError:
+            kv_pairs = [(layer.keys, layer.values) for layer in doc_kv.layers]
+        for k, v in kv_pairs:
+            ek = k.expand(mb_size, -1, -1, -1).contiguous()
+            ev = v.expand(mb_size, -1, -1, -1).contiguous()
+            try:
+                expanded_kv.key_cache.append(ek)
+                expanded_kv.value_cache.append(ev)
+            except AttributeError:
+                # New transformers: use update() method
+                layer_idx = len(expanded_kv)
+                expanded_kv.update(ek, ev, layer_idx)
 
         doc_prefix_mask = torch.ones(mb_size, doc_len, dtype=torch.long, device=device)
         full_mask = torch.cat([doc_prefix_mask, batch_mask], dim=1)
 
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_autocast):
             output = model(
                 input_ids=batch_ids,
                 attention_mask=full_mask,
@@ -275,21 +295,41 @@ def train(
     save_dir: str = "/results/onpolicy",
     eval_json_path: str = "/results/onpolicy/eval_scores.json",
 ):
-    device = "cuda"
+    if torch.cuda.is_available():
+        device = "cuda"
+        dtype = torch.bfloat16
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        dtype = torch.float32  # MPS doesn't support bfloat16 well
+    else:
+        device = "cpu"
+        dtype = torch.float32
+    print(f"Device: {device}, dtype: {dtype}")
 
     # ---- Load model + cache ----
     print(f"Loading model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # If loading from local path, set name_or_path so cartridges lookup tables work
+    if not tokenizer.name_or_path.startswith("meta-llama") and not tokenizer.name_or_path.startswith("Qwen"):
+        # Map local paths to canonical HF names
+        model_lower = model_name.lower()
+        if "llama-3.2-3b-instruct" in model_lower:
+            tokenizer.name_or_path = "meta-llama/Llama-3.2-3B-Instruct"
+        elif "llama-3.2-1b-instruct" in model_lower:
+            tokenizer.name_or_path = "meta-llama/Llama-3.2-1B-Instruct"
+        elif "llama-3.1-8b-instruct" in model_lower:
+            tokenizer.name_or_path = "meta-llama/Llama-3.1-8B-Instruct"
+        print(f"  Set tokenizer.name_or_path = {tokenizer.name_or_path}")
 
     # Teacher model (standard HF, for prefix KV computation)
     from transformers import AutoModelForCausalLM
     teacher_model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.bfloat16
+        model_name, torch_dtype=dtype
     ).to(device).eval()
 
     # Student model (FlexLlama for cache-augmented forward)
     flex_model = FlexLlamaForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.bfloat16
+        model_name, torch_dtype=dtype
     ).to(device).eval()
 
     # Freeze student model, only cache is trainable
@@ -415,10 +455,11 @@ def train(
             packed_count = batch["element_ids"].max().item() + 1
             i += max(packed_count, 1)
 
-            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+            with (torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16) if device == "cuda" else torch.enable_grad()):
                 cache.clear()
+                # FlexLlamaModel expects 1D inputs (adds batch dim internally)
                 outputs = wrapped_model(
-                    input_ids=batch["input_ids"].unsqueeze(0).to(device),
+                    input_ids=batch["input_ids"].to(device),
                     seq_ids=batch["element_ids"].to(device),
                     position_ids=batch["position_ids"].to(device),
                 )
