@@ -99,7 +99,7 @@ app = modal.App("tokasaurus-cartridge-server", image=image)
     # Keep 1 container always warm — cold starts kill on-policy training.
     min_containers=1,
     max_containers=1,
-    scaledown_window=18000,  # 5 hours before even considering shutdown
+    scaledown_window=3600,  # max allowed (1hr), but min_containers=1 keeps it always on
 )
 @modal.web_server(port=PORT, startup_timeout=600)
 def serve():
