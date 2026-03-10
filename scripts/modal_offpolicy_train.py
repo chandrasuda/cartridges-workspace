@@ -43,7 +43,7 @@ app = modal.App("offpolicy-baseline", image=image)
 # Training function
 # ---------------------------------------------------------------------------
 @app.function(
-    gpu="A100-80GB",
+    gpu="A10G",  # Off-policy only needs ~15GB (one model + activations)
     timeout=43200,       # 12 hours
     volumes={"/results": volume},
     secrets=[modal.Secret.from_name("huggingface-secret")],
@@ -158,7 +158,7 @@ def train():
             packing_mode="truncate",
         ),
         save_every_n_steps=512,
-        generate_eval_every_n_steps=128,
+        generate_eval_every_n_steps=50,
         generate_evals=[
             GenerationEvalConfig(
                 dataset=LongHealthMultipleChoiceGenerateDataset.Config(
