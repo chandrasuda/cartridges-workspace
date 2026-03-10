@@ -10,7 +10,7 @@ import modal
 
 TOKASAURUS_URL = "https://kiran1234c--tokasaurus-cartridge-server-serve.modal.run"
 GPU = "A100-80GB"
-WORKSPACE_VERSION = "v31-fix-prompt-format"
+WORKSPACE_VERSION = "v32-full-optimized-run"
 
 image = (
     modal.Image.from_registry(
@@ -75,7 +75,7 @@ def train():
         "--lr", "0.02",
         "--total-steps", "500",
         "--batch-size", "256",
-        "--eval-every", "1",
+        "--eval-every", "50",
         "--save-dir", "/results/onpolicy",
     ]
 
