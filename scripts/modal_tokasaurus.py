@@ -78,6 +78,7 @@ image = (
         "wandb",
         "boto3",
     )
+    .run_commands("echo 'toka-v2-compile-fix'")
     .run_commands(
         "pip install git+https://github.com/chandrasuda/tokasaurus.git@geoff/cartridges"
     )
@@ -95,11 +96,10 @@ app = modal.App("tokasaurus-cartridge-server", image=image)
     gpu=GPU,
     secrets=[modal.Secret.from_name("huggingface-secret")],
     timeout=86400,  # 24 hours — on-policy training runs for 15+ hours
-    # Scale to zero when idle — no GPU waste.
-    # max_containers=1 prevents runaway auto-scaling (was hitting 10 GPUs).
-    min_containers=0,
+    # Keep 1 container always warm — cold starts kill on-policy training.
+    min_containers=1,
     max_containers=1,
-    scaledown_window=1800,  # shut down after 30 min idle (steps can take 7+ min)
+    scaledown_window=18000,  # 5 hours before even considering shutdown
 )
 @modal.web_server(port=PORT, startup_timeout=600)
 def serve():
@@ -112,9 +112,9 @@ def serve():
             f"model={MODEL}",
             f"port={PORT}",
             # 32K tokens ≈ 3.5 GB KV cache.  Model weights ≈ 6 GB → ~10 GB total.
-            # A10G has 24 GB so this leaves plenty of headroom.
-            # Increase to 65536 if you need longer contexts.
             "kv_cache_num_tokens=32768",
+            # torch_compile + CUDA graphs = fastest per-request (1.33s vs 2.93s)
+            "torch_compile=True",
             "log_level=INFO",
         ]
     )

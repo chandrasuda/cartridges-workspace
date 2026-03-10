@@ -616,7 +616,7 @@ def train(
         # cartridges = [{"id": ckpt_path, "source": "local", "force_redownload": True}]
 
         # ---- 6. Eval (inline — reuses student model, no extra memory) ----
-        if eval_every > 0 and step % eval_every == 0:
+        if eval_every > 0 and step > 0 and step % eval_every == 0:
             # Free teacher to make room for eval on memory-constrained devices
             teacher_model.cpu()
             if device == "mps":
