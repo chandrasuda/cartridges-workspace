@@ -275,6 +275,117 @@ def build_packed_batch(samples, packed_seq_length=2048):
 
 
 # ---------------------------------------------------------------------------
+# Inline eval — reuses the student model, no extra memory
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def _run_inline_eval(flex_model, cache, tokenizer, ckpt_path, step, device, eval_json_path, patient_doc_ids):
+    """Evaluate a cartridge checkpoint on LongHealth using the already-loaded model."""
+    from cartridges.generation import flex_generate
+    from cartridges.cache import AttnConfig, TrainableCache
+
+    EVAL_PATIENT_IDS = {f"patient_{i:02d}" for i in range(1, 11)}
+
+    # Load questions (cached after first call)
+    if not hasattr(_run_inline_eval, "_questions"):
+        data = requests.get(
+            "https://raw.githubusercontent.com/kbressem/LongHealth/refs/heads/main/data/benchmark_v5.json"
+        ).json()
+        _run_inline_eval._questions = []
+        for pid, patient in data.items():
+            if pid not in EVAL_PATIENT_IDS:
+                continue
+            for q in patient["questions"]:
+                options = "\n".join(L + ") " + q["answer_" + L.lower()] for L in "ABCDE")
+                prompt = (
+                    f"You are answering a multiple choice question about patient {patient['name']}.\n\n"
+                    f"Question: {q['question']}\n\nOptions:\n{options}\n\n"
+                    f"Answer with ONLY the letter (A, B, C, D, or E):"
+                )
+                answer_map = {q["answer_" + L.lower()]: L for L in "ABCDE"}
+                _run_inline_eval._questions.append({
+                    "prompt": prompt,
+                    "correct": answer_map.get(q["correct"], "?"),
+                })
+        print(f"  [eval] Loaded {len(_run_inline_eval._questions)} questions")
+
+    questions = _run_inline_eval._questions
+
+    # Load cache from checkpoint (to eval the saved state, not the live state)
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    if "fixed_keys" in ckpt and "frozen_keys" not in ckpt:
+        ckpt["frozen_keys"] = ckpt.pop("fixed_keys")
+        ckpt["frozen_values"] = ckpt.pop("fixed_values")
+    tk = ckpt["trainable_keys"]
+    fk = ckpt["frozen_keys"]
+    nl, nh, hd = len(tk), tk[0].size(1), tk[0].size(3)
+    nf = fk[0].size(2) if fk else 0
+    ik = [torch.cat([fk[i], tk[i]], dim=2).contiguous() if nf > 0 else tk[i] for i in range(nl)]
+    iv = [torch.cat([ckpt["frozen_values"][i], ckpt["trainable_values"][i]], dim=2).contiguous() if nf > 0 else ckpt["trainable_values"][i] for i in range(nl)]
+    eval_cache = TrainableCache(
+        config=AttnConfig(n_layers=nl, n_heads=nh, head_dim=hd),
+        init_keys=ik, init_values=iv, num_frozen_tokens=nf,
+    ).to(device)
+    del ckpt
+
+    def extract_answer(text):
+        m = re.search(r"\b([A-E])\b", text.strip()[:20])
+        return m.group(1) if m else "?"
+
+    t0 = time.time()
+    correct = 0
+    for qi, q in enumerate(questions):
+        ids = tokenizer.encode(q["prompt"])
+        input_ids = torch.tensor(ids, dtype=torch.long, device=device)
+        seq_ids = torch.zeros_like(input_ids)
+        position_ids = torch.arange(len(ids), dtype=torch.long, device=device)
+        eval_cache.clear()
+        gen_output = flex_generate(
+            model=flex_model, tokenizer=tokenizer, cache=eval_cache,
+            input_ids=input_ids, seq_ids=seq_ids, position_ids=position_ids,
+            max_new_tokens=10, temperature=0.0,
+        )
+        gen_tokens = gen_output.get(0, [])
+        gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True)
+        pred = extract_answer(gen_text)
+        if qi < 5:
+            print(f"  Q{qi}: gen='{gen_text[:80]}' pred={pred} correct={q['correct']}")
+        if pred == q["correct"]:
+            correct += 1
+
+    total = len(questions)
+    acc = correct / total * 100
+    elapsed = time.time() - t0
+    print(f"\n  {'='*56}")
+    print(f"  EVAL @ step {step}: {correct}/{total} ({acc:.1f}%) [{elapsed:.0f}s]")
+    print(f"  {'='*56}\n")
+
+    # Save results
+    eval_results_path = eval_json_path
+    if os.path.exists(eval_results_path):
+        with open(eval_results_path) as f:
+            results = json.load(f)
+    else:
+        results = {"method": "on_policy", "evals": []}
+    results["evals"].append({
+        "optimizer_step": step,
+        "total_tokens": step * 256 * 250,
+        "scores": {"score": round(acc / 100, 4)},
+        "num_eval_questions": total,
+        "correct": correct,
+    })
+    os.makedirs(os.path.dirname(eval_results_path), exist_ok=True)
+    with open(eval_results_path, "w") as f:
+        json.dump(results, f, indent=2)
+
+    del eval_cache
+    if device == "mps":
+        torch.mps.empty_cache()
+    elif device == "cuda":
+        torch.cuda.empty_cache()
+
+
+# ---------------------------------------------------------------------------
 # Main training loop
 # ---------------------------------------------------------------------------
 
@@ -293,7 +404,7 @@ def train(
     top_k: int = 20,
     eval_every: int = 50,
     save_dir: str = "/results/onpolicy",
-    eval_json_path: str = "/results/onpolicy/eval_scores.json",
+    eval_json_path: str = None,  # defaults to save_dir/eval_scores.json
 ):
     if torch.cuda.is_available():
         device = "cuda"
@@ -305,6 +416,9 @@ def train(
         device = "cpu"
         dtype = torch.float32
     print(f"Device: {device}, dtype: {dtype}")
+
+    if eval_json_path is None:
+        eval_json_path = os.path.join(save_dir, "eval_scores.json")
 
     # ---- Load model + cache ----
     print(f"Loading model: {model_name}")
@@ -501,25 +615,17 @@ def train(
         # On Modal (same container), local paths would work.
         # cartridges = [{"id": ckpt_path, "source": "local", "force_redownload": True}]
 
-        # ---- 6. Eval ----
+        # ---- 6. Eval (inline — reuses student model, no extra memory) ----
         if eval_every > 0 and step % eval_every == 0:
-            import subprocess, sys
-            eval_script = os.path.join(
-                os.path.dirname(__file__), "..", "verl", "verl", "scripts", "cartridge_eval_subprocess.py"
+            # Free teacher to make room for eval on memory-constrained devices
+            teacher_model.cpu()
+            if device == "mps":
+                torch.mps.empty_cache()
+            _run_inline_eval(
+                flex_model, cache, tokenizer, ckpt_path, step,
+                device, eval_json_path, patient_doc_ids,
             )
-            if os.path.exists(eval_script):
-                print(f"  Running eval at step {step}...")
-                env = os.environ.copy()
-                env["CUDA_VISIBLE_DEVICES"] = "0"
-                env["PYTHONUNBUFFERED"] = "1"
-                result = subprocess.run(
-                    [sys.executable, eval_script,
-                     "--ckpt", ckpt_path, "--step", str(step),
-                     "--model", model_name, "--eval-json", eval_json_path],
-                    env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600,
-                )
-                for line in result.stdout.decode().splitlines():
-                    print(f"  {line}")
+            teacher_model.to(device)  # reload teacher for next step
 
     print(f"\nTraining complete. {total_steps} steps.")
 
