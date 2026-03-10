@@ -351,12 +351,21 @@ def train(
         for _ in range(batch_size):
             row = train_df.iloc[prompt_idx % len(train_df)]
             prompt_idx += 1
+            # prompt column is a list of chat messages [{"role": "user", "content": "..."}]
+            messages = row["prompt"]
+            if isinstance(messages, str):
+                messages = json.loads(messages)
             prompts_data.append({
-                "text": row["prompt"],
+                "messages": messages,
                 "patient_id": row["patient_id"],
             })
 
-        prompt_ids_list = [tokenizer.encode(p["text"]) for p in prompts_data]
+        prompt_ids_list = [
+            tokenizer.apply_chat_template(
+                p["messages"], add_generation_prompt=True, tokenize=True,
+            )
+            for p in prompts_data
+        ]
 
         # ---- 2. Generate responses via Tokasaurus ----
         gen_t0 = time.time()
