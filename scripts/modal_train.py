@@ -202,8 +202,8 @@ def train():
         "trainer.test_freq=-1",  # Disable reward-based test (dummy reward = useless)
         "+trainer.cartridge_save_freq=50",  # Save cache .pt every 50 steps for eval
         "trainer.default_local_dir=/results/onpolicy",
-        "trainer.total_epochs=1",  # One pass through the 110K prompts = 3440 steps
-        # Don't set total_training_steps — let it use len(dataloader) * total_epochs
+        "trainer.total_epochs=100",  # High ceiling
+        "trainer.total_training_steps=500",  # ~500 steps ≈ 37 hours ≈ $140 on A100
         "trainer.val_before_train=False",
     ]
 
