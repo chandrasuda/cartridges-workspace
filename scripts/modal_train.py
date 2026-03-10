@@ -216,7 +216,7 @@ def train():
     print(f"  Loss           : top-k CE (k=20), teacher prefix KV opt")
     print(f"  Rollout        : 8 concurrent workers")
     print(f"  Data           : {len(train_df):,} prompts, {train_df.patient_id.nunique()} patients")
-    print(f"  Save every     : 10 steps  |  Eval every: 10 steps")
+    print(f"  Save every     : 50 steps  |  Eval every: 50 steps")
     print(f"{'='*60}\n")
 
     import time as _time
