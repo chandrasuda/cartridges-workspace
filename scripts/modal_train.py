@@ -15,7 +15,7 @@ GPU = "A100-80GB"
 
 # Build image: clone cartridges-workspace with all submodules (verl, cartridges, tokasaurus)
 # Cache bust: bump to force re-clone when any repo changes
-WORKSPACE_VERSION = "v28-debug-eval-every-step"
+WORKSPACE_VERSION = "v29-batch256-match-offpolicy"
 
 image = (
     modal.Image.from_registry(
@@ -146,7 +146,7 @@ def train():
         #
         f"data.train_files={train_parquet}",
         f"data.val_files={val_parquet}",
-        "data.train_batch_size=32",
+        "data.train_batch_size=256",  # 256 samples × ~250 tok ≈ 64K tok/step (matches off-policy)
         "data.max_prompt_length=512",
         "data.max_response_length=512",
         "data.filter_overlong_prompts=True",
@@ -158,8 +158,8 @@ def train():
         "actor_rollout_ref.model.enable_gradient_checkpointing=True",
         #
         "actor_rollout_ref.actor.strategy=fsdp",
-        "actor_rollout_ref.actor.ppo_mini_batch_size=32",
-        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8",
+        "actor_rollout_ref.actor.ppo_mini_batch_size=256",  # all 256 in one optimizer step
+        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8",  # 32 grad accum steps
         "actor_rollout_ref.actor.use_kl_loss=True",
         "actor_rollout_ref.actor.kl_loss_coef=1.0",
         "actor_rollout_ref.actor.kl_loss_type=low_var_kl",
@@ -212,7 +212,7 @@ def train():
     print(f"  Tokasaurus URL : {TOKASAURUS_URL}")
     print(f"  GPU            : {GPU}")
     print(f"  Cartridge size : 512 tokens")
-    print(f"  Batch size     : 32 (patient-grouped, same patient per batch)")
+    print(f"  Batch size     : 256 (~64K tok/step, matches off-policy)")
     print(f"  Loss           : top-k CE (k=20), teacher prefix KV opt")
     print(f"  Rollout        : 8 concurrent workers")
     print(f"  Data           : {len(train_df):,} prompts, {train_df.patient_id.nunique()} patients")
