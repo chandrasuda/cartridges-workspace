@@ -10,7 +10,7 @@ import modal
 
 TOKASAURUS_URL = "https://kiran1234c--tokasaurus-cartridge-server-serve.modal.run"
 GPU = "A100-80GB"
-WORKSPACE_VERSION = "v37-toka-self-warm"
+WORKSPACE_VERSION = "v40-failfast-local-plus-20s-wait"
 
 image = (
     modal.Image.from_registry(
@@ -45,13 +45,6 @@ image = (
 )
 
 results_volume = modal.Volume.from_name("onpolicy-v2-results", create_if_missing=True)
-
-# Mount local training script (so we use local changes, not git version)
-local_script = modal.Mount.from_local_file(
-    "scripts/online_cartridge_train.py",
-    remote_path="/opt/local_scripts/online_cartridge_train.py"
-)
-
 app = modal.App("onpolicy-v2-optimized", image=image)
 
 
@@ -63,10 +56,9 @@ app = modal.App("onpolicy-v2-optimized", image=image)
     max_containers=1,
     scaledown_window=600,
     volumes={"/results": results_volume},
-    mounts=[local_script],  # Use local training script
 )
 def train():
-    import subprocess, os, sys
+    import subprocess, os, sys, threading, time
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -75,7 +67,7 @@ def train():
     assert os.path.exists(train_parquet), f"Missing {train_parquet}"
 
     cmd = [
-        sys.executable, "/opt/local_scripts/online_cartridge_train.py",  # Use mounted local script
+        sys.executable, "/opt/workspace/scripts/online_cartridge_train.py",
         "--model", "meta-llama/Llama-3.2-3B-Instruct",
         "--tokasaurus-url", TOKASAURUS_URL,
         "--train-parquet", train_parquet,
@@ -87,9 +79,25 @@ def train():
         "--save-dir", "/results/onpolicy",
     ]
 
+    # Periodically commit the volume so Tokasaurus (which calls reload()) can
+    # see new cartridge checkpoint files written by the training subprocess.
+    # Without this, writes are only flushed once at the very end (too late).
+    def periodic_commit_loop():
+        while True:
+            time.sleep(15)
+            try:
+                results_volume.commit()
+                print("[VOLUME] Committed volume (cartridge checkpoints visible to Tokasaurus)", flush=True)
+            except Exception as e:
+                print(f"[VOLUME] Commit failed: {e}", flush=True)
+
+    commit_thread = threading.Thread(target=periodic_commit_loop, daemon=True)
+    commit_thread.start()
+    print("Started periodic volume commit thread (15s interval)", flush=True)
+
     print(f"Running optimized on-policy trainer...")
     result = subprocess.run(cmd, env=env, stdout=sys.stdout, stderr=sys.stderr)
-    results_volume.commit()
+    results_volume.commit()  # Final commit after all steps
     return result.returncode
 
 

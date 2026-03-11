@@ -79,9 +79,15 @@ image = (
         "boto3",
         "requests",  # for warmup request during server startup
     )
-    .run_commands("echo 'toka-v3-warmup-on-startup'")
+    # Install Tokasaurus from the workspace repo (same source as training image)
+    # so that fixes to tokasaurus/ in the workspace are picked up by both images.
+    .run_commands("echo 'toka-v4-workspace-install-failfast-local'")
     .run_commands(
-        "pip install git+https://github.com/chandrasuda/tokasaurus.git@geoff/cartridges"
+        "git clone --recurse-submodules --depth 1 "
+        "https://github.com/chandrasuda/cartridges-workspace.git /opt/workspace"
+    )
+    .run_commands(
+        "pip install -e /opt/workspace/tokasaurus"
     )
     # Download model weights at build time (baked into image, no runtime download)
     .run_function(
@@ -188,6 +194,33 @@ def serve():
     
     output_thread = threading.Thread(target=stream_output, args=(proc,), daemon=True)
     output_thread.start()
+
+    # -------------------------------------------------------------------------
+    # Volume refresh thread: reload every few seconds so Tokasaurus sees new
+    # cartridge checkpoint files written by the training container.
+    # Modal volumes require explicit reload() to pick up changes from other
+    # containers — the mounted view is otherwise stale for the lifetime of
+    # this container.
+    # -------------------------------------------------------------------------
+    def volume_refresh_loop():
+        """Periodically reload the shared volume so newly-written cartridges are visible."""
+        reload_count = 0
+        last_log_time = 0
+        while True:
+            time.sleep(5)  # Refresh every 5 seconds
+            try:
+                results_volume.reload()
+                reload_count += 1
+                now = time.time()
+                if now - last_log_time > 60:  # Log once per minute to avoid spam
+                    print(f"[VOLUME] Reloaded {reload_count} times (cartridge dir refreshed)", flush=True)
+                    last_log_time = now
+            except Exception as e:
+                print(f"[VOLUME] Reload error: {e}", flush=True)
+
+    volume_thread = threading.Thread(target=volume_refresh_loop, daemon=True)
+    volume_thread.start()
+    print("Started volume refresh thread (5s interval) — new cartridges will be visible within 5s", flush=True)
 
     # -------------------------------------------------------------------------
     # Wait for server to be ready

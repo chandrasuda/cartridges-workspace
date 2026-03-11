@@ -624,6 +624,14 @@ def train(
         with open(os.path.join(cartridge_dir, "config.yaml"), "w") as f:
             yaml.dump(config_yaml, f)
         
+        # Wait for the Modal volume to be committed (periodic commit fires every 15s)
+        # and for Tokasaurus to reload its volume view (every 5s).  Without this wait
+        # the generation requests for the new cartridge arrive before the volume sync,
+        # causing Tokasaurus to return 400 on the first few attempts.  The training's
+        # retry logic (5 attempts, exp backoff) covers the remaining race window.
+        print(f"  Waiting 20s for volume commit+reload sync before next generation...", flush=True)
+        time.sleep(20)
+        
         # Sync cartridge to Tokasaurus via shared volume path.
         # Both containers mount /results from the same Modal volume.
         # The cartridge_id is just the directory name (step-N), not the full path
