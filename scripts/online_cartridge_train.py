@@ -58,7 +58,7 @@ async def _generate_one(session, url, prompt_ids, max_tokens, temperature, cartr
             async with session.post(
                 f"{url}/custom/cartridge/completions",
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=120),
+                timeout=aiohttp.ClientTimeout(total=300),  # 5min for torch.compile cold start
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
