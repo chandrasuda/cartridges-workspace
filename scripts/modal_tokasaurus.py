@@ -90,6 +90,9 @@ image = (
     )
 )
 
+# Shared volume for cartridge checkpoints (same as training job)
+results_volume = modal.Volume.from_name("onpolicy-v2-results", create_if_missing=True)
+
 app = modal.App("tokasaurus-cartridge-server", image=image)
 
 
@@ -100,16 +103,127 @@ app = modal.App("tokasaurus-cartridge-server", image=image)
     min_containers=1,
     max_containers=1,
     scaledown_window=3600,
+    volumes={"/results": results_volume},  # Shared with training job for cartridge checkpoints
 )
 @modal.web_server(port=PORT, startup_timeout=600)
 def serve():
     """Start Tokasaurus server. Model weights are already in the image."""
     import subprocess
+    import time
+    import requests
+    import threading
+    import os
+    import signal
+    import sys
 
-    # subprocess.run blocks until toka exits — prevents multiple toka processes.
-    # torch_compile=False so toka starts in seconds (Modal health check passes fast).
-    # First requests are slower but toka does runtime JIT on first inference anyway.
-    subprocess.run([
-        "toka", f"model={MODEL}", f"port={PORT}",
-        "kv_cache_num_tokens=32768", "torch_compile=False", "log_level=INFO",
-    ])
+    # -------------------------------------------------------------------------
+    # GPU + Process monitoring thread
+    # -------------------------------------------------------------------------
+    def monitor_loop(proc):
+        """Background thread: logs GPU memory + checks if toka process died."""
+        import time
+        while True:
+            time.sleep(30)  # Log every 30 seconds
+            
+            # Check if toka process died
+            ret = proc.poll()
+            if ret is not None:
+                print(f"!!! TOKA PROCESS DIED with exit code {ret} !!!", flush=True)
+                # Try to get any stderr output
+                try:
+                    stdout, stderr = proc.communicate(timeout=1)
+                    if stdout:
+                        print(f"TOKA STDOUT: {stdout.decode()[-2000:]}", flush=True)
+                    if stderr:
+                        print(f"TOKA STDERR: {stderr.decode()[-2000:]}", flush=True)
+                except:
+                    pass
+                print("Exiting monitor - toka is dead", flush=True)
+                return
+            
+            # Log GPU memory usage
+            try:
+                result = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu",
+                     "--format=csv,noheader,nounits"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    parts = result.stdout.strip().split(", ")
+                    if len(parts) >= 3:
+                        mem_used, mem_total, gpu_util = parts[0], parts[1], parts[2]
+                        print(f"[MONITOR] GPU: {mem_used}/{mem_total} MB ({gpu_util}% util) | toka pid={proc.pid} running", flush=True)
+            except Exception as e:
+                print(f"[MONITOR] nvidia-smi failed: {e}", flush=True)
+
+    # -------------------------------------------------------------------------
+    # Start toka process
+    # -------------------------------------------------------------------------
+    print(f"Starting Tokasaurus with model={MODEL}, port={PORT}", flush=True)
+    # Set cartridge_dir to the shared volume path where training saves checkpoints
+    proc = subprocess.Popen(
+        ["toka", f"model={MODEL}", f"port={PORT}",
+         "kv_cache_num_tokens=32768", "torch_compile=False", "log_level=INFO",
+         "cartridge_dir=/results/onpolicy/cartridge_checkpoints"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # Merge stderr into stdout
+    )
+    print(f"Toka process started with PID {proc.pid}", flush=True)
+
+    # Start monitoring thread
+    monitor_thread = threading.Thread(target=monitor_loop, args=(proc,), daemon=True)
+    monitor_thread.start()
+
+    # -------------------------------------------------------------------------
+    # Stream toka output to Modal logs in background
+    # -------------------------------------------------------------------------
+    def stream_output(proc):
+        """Stream toka stdout/stderr to Modal logs."""
+        try:
+            for line in iter(proc.stdout.readline, b''):
+                if line:
+                    print(f"[TOKA] {line.decode().rstrip()}", flush=True)
+        except Exception as e:
+            print(f"[TOKA OUTPUT ERROR] {e}", flush=True)
+    
+    output_thread = threading.Thread(target=stream_output, args=(proc,), daemon=True)
+    output_thread.start()
+
+    # -------------------------------------------------------------------------
+    # Wait for server to be ready
+    # -------------------------------------------------------------------------
+    print("Waiting for tokasaurus to be ready...", flush=True)
+    max_wait = 540  # 9 minutes max
+    start = time.time()
+    
+    while time.time() - start < max_wait:
+        # Check if process died during startup
+        if proc.poll() is not None:
+            print(f"!!! TOKA DIED DURING STARTUP with exit code {proc.returncode} !!!", flush=True)
+            return
+        
+        try:
+            resp = requests.get(f"http://localhost:{PORT}/ping", timeout=5)
+            if resp.status_code == 200 and resp.json().get("message") == "pong":
+                print(f"Ping OK after {time.time() - start:.1f}s, doing warmup inference...", flush=True)
+                # Do one warmup inference
+                warmup_resp = requests.post(
+                    f"http://localhost:{PORT}/v1/chat/completions",
+                    json={
+                        "model": MODEL,
+                        "messages": [{"role": "user", "content": "Hi"}],
+                        "max_tokens": 5,
+                    },
+                    timeout=300,
+                )
+                if warmup_resp.status_code == 200:
+                    print(f"✓ Tokasaurus ready after {time.time() - start:.1f}s", flush=True)
+                    return  # Return after ready - don't block!
+                else:
+                    print(f"Warmup failed: {warmup_resp.status_code} {warmup_resp.text[:200]}", flush=True)
+        except requests.exceptions.RequestException as e:
+            if time.time() - start > 60:  # Only log after 60s to avoid spam
+                print(f"Still waiting for toka... ({time.time() - start:.0f}s) - {type(e).__name__}", flush=True)
+        time.sleep(1)
+    
+    print("WARNING: Tokasaurus may not be fully ready after 9 minutes!", flush=True)

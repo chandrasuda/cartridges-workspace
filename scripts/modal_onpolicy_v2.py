@@ -45,6 +45,13 @@ image = (
 )
 
 results_volume = modal.Volume.from_name("onpolicy-v2-results", create_if_missing=True)
+
+# Mount local training script (so we use local changes, not git version)
+local_script = modal.Mount.from_local_file(
+    "scripts/online_cartridge_train.py",
+    remote_path="/opt/local_scripts/online_cartridge_train.py"
+)
+
 app = modal.App("onpolicy-v2-optimized", image=image)
 
 
@@ -56,6 +63,7 @@ app = modal.App("onpolicy-v2-optimized", image=image)
     max_containers=1,
     scaledown_window=600,
     volumes={"/results": results_volume},
+    mounts=[local_script],  # Use local training script
 )
 def train():
     import subprocess, os, sys
@@ -67,14 +75,14 @@ def train():
     assert os.path.exists(train_parquet), f"Missing {train_parquet}"
 
     cmd = [
-        sys.executable, "/opt/workspace/scripts/online_cartridge_train.py",
+        sys.executable, "/opt/local_scripts/online_cartridge_train.py",  # Use mounted local script
         "--model", "meta-llama/Llama-3.2-3B-Instruct",
         "--tokasaurus-url", TOKASAURUS_URL,
         "--train-parquet", train_parquet,
         "--num-tokens", "512",
         "--lr", "0.02",
         "--total-steps", "500",
-        "--batch-size", "256",
+        "--batch-size", "64",  # Reduced from 256 to avoid Tokasaurus timeouts
         "--eval-every", "50",
         "--save-dir", "/results/onpolicy",
     ]

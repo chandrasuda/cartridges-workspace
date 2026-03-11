@@ -18,6 +18,7 @@ import json
 import os
 import re
 import time
+import yaml
 from pathlib import Path
 
 import aiohttp
@@ -79,7 +80,7 @@ async def _generate_one(session, url, prompt_ids, max_tokens, temperature, cartr
     return []
 
 
-async def generate_batch(url, prompt_ids_list, max_tokens, temperature, cartridges, max_concurrent=32):
+async def generate_batch(url, prompt_ids_list, max_tokens, temperature, cartridges, max_concurrent=8):
     """Generate responses for a batch of prompts, up to max_concurrent at once."""
     connector = aiohttp.TCPConnector(limit=max_concurrent)
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -606,13 +607,27 @@ def train(
             f"({len(valid)}/{batch_size} valid, {n_batches} packed batches)"
         )
 
-        # ---- 5. Save checkpoint + sync ----
-        ckpt_path = os.path.join(ckpt_dir, f"cache-step{step}.pt")
-        cache.save(ckpt_path)
-
+        # ---- 5. Save checkpoint in Tokasaurus-compatible format ----
+        # Tokasaurus expects: directory with cartridge.pt and config.yaml
+        cartridge_id = f"step-{step}"
+        cartridge_dir = os.path.join(ckpt_dir, cartridge_id)
+        os.makedirs(cartridge_dir, exist_ok=True)
+        
+        # Save cache as cartridge.pt
+        cache.save(os.path.join(cartridge_dir, "cartridge.pt"))
+        
+        # Create config.yaml with required metadata
+        config_yaml = {
+            "kv_cache_initializer": {"max_tokens": num_tokens},
+            "model": {"pretrained_model_name_or_path": model_name},
+        }
+        with open(os.path.join(cartridge_dir, "config.yaml"), "w") as f:
+            yaml.dump(config_yaml, f)
+        
         # Sync cartridge to Tokasaurus via shared volume path.
         # Both containers mount /results from the same Modal volume.
-        cartridges = [{"id": ckpt_path, "source": "local", "force_redownload": True}]
+        # The cartridge_id is just the directory name (step-N), not the full path
+        cartridges = [{"id": cartridge_id, "source": "local", "force_redownload": True}]
 
         # ---- 6. Eval (inline — reuses student model, no extra memory) ----
         if eval_every > 0 and step > 0 and step % eval_every == 0:
@@ -620,6 +635,7 @@ def train(
             teacher_model.cpu()
             if device == "mps":
                 torch.mps.empty_cache()
+            ckpt_path = os.path.join(cartridge_dir, "cartridge.pt")
             _run_inline_eval(
                 flex_model, cache, tokenizer, ckpt_path, step,
                 device, eval_json_path, patient_doc_ids,
