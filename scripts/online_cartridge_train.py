@@ -74,7 +74,7 @@ async def _generate_one(session, url, prompt_ids, max_tokens, temperature, cartr
                     text = await resp.text()
                     print(f"  [toka] HTTP {resp.status} (attempt {attempt+1}/5): {text[:100]}")
         except Exception as e:
-            print(f"  [toka] Request failed (attempt {attempt+1}/5): {e}")
+            print(f"  [toka] Request failed (attempt {attempt+1}/5): {type(e).__name__}: {e}")
         await asyncio.sleep(2 ** attempt)
     return []
 
@@ -610,10 +610,9 @@ def train(
         ckpt_path = os.path.join(ckpt_dir, f"cache-step{step}.pt")
         cache.save(ckpt_path)
 
-        # Note: cartridge sync to remote Tokasaurus requires shared storage.
-        # For local training, we generate without cartridge (base model).
-        # On Modal (same container), local paths would work.
-        # cartridges = [{"id": ckpt_path, "source": "local", "force_redownload": True}]
+        # Sync cartridge to Tokasaurus via shared volume path.
+        # Both containers mount /results from the same Modal volume.
+        cartridges = [{"id": ckpt_path, "source": "local", "force_redownload": True}]
 
         # ---- 6. Eval (inline — reuses student model, no extra memory) ----
         if eval_every > 0 and step > 0 and step % eval_every == 0:

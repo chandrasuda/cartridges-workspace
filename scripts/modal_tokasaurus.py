@@ -91,15 +91,18 @@ image = (
 
 app = modal.App("tokasaurus-cartridge-server", image=image)
 
+# Shared volume with training container so cartridge syncs work via local path
+cartridge_volume = modal.Volume.from_name("onpolicy-v2-results", create_if_missing=True)
+
 
 @app.function(
     gpu=GPU,
     secrets=[modal.Secret.from_name("huggingface-secret")],
-    timeout=86400,  # 24 hours — on-policy training runs for 15+ hours
-    # Keep 1 container always warm — cold starts kill on-policy training.
+    timeout=86400,
     min_containers=1,
     max_containers=1,
-    scaledown_window=3600,  # max allowed (1hr), but min_containers=1 keeps it always on
+    scaledown_window=3600,
+    volumes={"/results": cartridge_volume},  # same volume as training container
 )
 @modal.web_server(port=PORT, startup_timeout=600)
 def serve():

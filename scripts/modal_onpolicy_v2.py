@@ -10,7 +10,7 @@ import modal
 
 TOKASAURUS_URL = "https://kiran1234c--tokasaurus-cartridge-server-serve.modal.run"
 GPU = "A100-80GB"
-WORKSPACE_VERSION = "v33-toka-always-on"
+WORKSPACE_VERSION = "v34-cartridge-sync-fixed"
 
 image = (
     modal.Image.from_registry(
