@@ -5,4 +5,7 @@ __pycache__/
 checkpoints/
 results/
 *.pt
+*.safetensors
 data/hf_shards/
+model/
+local_eval/cartridges/

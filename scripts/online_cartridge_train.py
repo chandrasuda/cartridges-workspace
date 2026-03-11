@@ -406,6 +406,7 @@ def train(
     eval_every: int = 50,
     save_dir: str = "/results/onpolicy",
     eval_json_path: str = None,  # defaults to save_dir/eval_scores.json
+    off_policy_warmup_steps: int = 0,  # steps to generate WITHOUT cartridge first
 ):
     if torch.cuda.is_available():
         device = "cuda"
@@ -487,12 +488,14 @@ def train(
     cartridges = []  # start with no cartridge (KVFromText init)
 
     print(f"\n{'='*60}")
-    print(f"OPTIMIZED ON-POLICY TRAINING (no Ray, no PPO, no FSDP)")
+    print(f"HYBRID OFF→ON-POLICY TRAINING (no Ray, no PPO, no FSDP)")
     print(f"  Model      : {model_name}")
     print(f"  Cache      : {num_tokens} tokens, LR={lr}")
     print(f"  Batch      : {batch_size} samples")
     print(f"  Steps      : {total_steps}")
     print(f"  Eval every : {eval_every} steps")
+    print(f"  Off-policy warmup: {off_policy_warmup_steps} steps (no cartridge in generation)")
+    print(f"  On-policy start : step {off_policy_warmup_steps}")
     print(f"  Tokasaurus : {tokasaurus_url}")
     print(f"{'='*60}\n")
 
@@ -523,9 +526,14 @@ def train(
         ]
 
         # ---- 2. Generate responses via Tokasaurus ----
+        # During off-policy warmup, always generate WITHOUT the cartridge so the
+        # training distribution is stable and independent of the cache quality.
+        # This bootstraps the cache before on-policy kicks in at step off_policy_warmup_steps.
+        gen_cartridges = [] if step < off_policy_warmup_steps else cartridges
+        phase = "off-policy" if step < off_policy_warmup_steps else "on-policy"
         gen_t0 = time.time()
         response_ids_list = asyncio.run(generate_batch(
-            tokasaurus_url, prompt_ids_list, max_response_length, temperature, cartridges,
+            tokasaurus_url, prompt_ids_list, max_response_length, temperature, gen_cartridges,
         ))
         gen_elapsed = time.time() - gen_t0
 
@@ -602,7 +610,7 @@ def train(
 
         avg_loss = accum_loss / max(n_batches, 1)
         print(
-            f"Step {step}: loss={avg_loss:.4f} "
+            f"Step {step} [{phase}]: loss={avg_loss:.4f} "
             f"[gen={gen_elapsed:.1f}s teacher={teacher_elapsed:.1f}s train={train_elapsed:.1f}s total={step_elapsed:.1f}s] "
             f"({len(valid)}/{batch_size} valid, {n_batches} packed batches)"
         )
@@ -624,13 +632,14 @@ def train(
         with open(os.path.join(cartridge_dir, "config.yaml"), "w") as f:
             yaml.dump(config_yaml, f)
         
-        # Wait for the Modal volume to be committed (periodic commit fires every 15s)
-        # and for Tokasaurus to reload its volume view (every 5s).  Without this wait
-        # the generation requests for the new cartridge arrive before the volume sync,
-        # causing Tokasaurus to return 400 on the first few attempts.  The training's
-        # retry logic (5 attempts, exp backoff) covers the remaining race window.
-        print(f"  Waiting 20s for volume commit+reload sync before next generation...", flush=True)
-        time.sleep(20)
+        # During on-policy phase, wait for the Modal volume to commit+reload so
+        # Tokasaurus can see the new cartridge before the next generation step.
+        # Skip this wait during off-policy warmup — we're not using the cartridge
+        # for generation so there's no need to sync it first.
+        next_step_is_onpolicy = (step + 1) >= off_policy_warmup_steps
+        if next_step_is_onpolicy:
+            print(f"  Waiting 20s for volume commit+reload sync before next generation...", flush=True)
+            time.sleep(20)
         
         # Sync cartridge to Tokasaurus via shared volume path.
         # Both containers mount /results from the same Modal volume.
@@ -664,6 +673,8 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--eval-every", type=int, default=1)
     parser.add_argument("--save-dir", default="/results/onpolicy")
+    parser.add_argument("--off-policy-warmup-steps", type=int, default=0,
+                        help="Generate without cartridge for first N steps (off-policy warmup)")
     args = parser.parse_args()
 
     train(
@@ -676,4 +687,5 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         eval_every=args.eval_every,
         save_dir=args.save_dir,
+        off_policy_warmup_steps=args.off_policy_warmup_steps,
     )
