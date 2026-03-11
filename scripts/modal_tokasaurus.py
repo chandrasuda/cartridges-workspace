@@ -81,7 +81,7 @@ image = (
     )
     # Install Tokasaurus from the workspace repo (same source as training image)
     # so that fixes to tokasaurus/ in the workspace are picked up by both images.
-    .run_commands("echo 'toka-v4-workspace-install-failfast-local'")
+    .run_commands("echo 'toka-v5-fuse-dentry-listdir-fix'")
     .run_commands(
         "git clone --recurse-submodules --depth 1 "
         "https://github.com/chandrasuda/cartridges-workspace.git /opt/workspace"
@@ -203,17 +203,42 @@ def serve():
     # this container.
     # -------------------------------------------------------------------------
     def volume_refresh_loop():
-        """Periodically reload the shared volume so newly-written cartridges are visible."""
+        """Periodically reload the shared volume so newly-written cartridges are visible.
+
+        Key insight: results_volume.reload() updates Modal SDK's Python-level cache,
+        but the toka subprocess uses the kernel FUSE dentry cache which is NOT
+        automatically refreshed.  After reload() we explicitly os.listdir() the
+        cartridge directory and each subdirectory so the kernel re-fetches entries
+        from the FUSE backend and updates the shared dentry cache (shared by ALL
+        processes in the container, including the toka subprocess).
+        """
+        import os as _os
         reload_count = 0
         last_log_time = 0
+        cartridge_base = '/results/onpolicy/cartridge_checkpoints'
         while True:
             time.sleep(5)  # Refresh every 5 seconds
             try:
                 results_volume.reload()
                 reload_count += 1
+
+                # Force kernel FUSE dentry cache to pick up newly committed files.
+                # os.listdir() on a FUSE directory triggers readdir() which refreshes
+                # the kernel dentry cache for all entries — making them visible to
+                # the toka subprocess (same kernel, shared dentry cache).
+                try:
+                    subdirs = _os.listdir(cartridge_base)
+                    for sd in subdirs:
+                        try:
+                            _os.listdir(_os.path.join(cartridge_base, sd))
+                        except OSError:
+                            pass
+                except OSError:
+                    pass  # cartridge_base not yet created
+
                 now = time.time()
                 if now - last_log_time > 60:  # Log once per minute to avoid spam
-                    print(f"[VOLUME] Reloaded {reload_count} times (cartridge dir refreshed)", flush=True)
+                    print(f"[VOLUME] Reloaded {reload_count} times (dentry cache refreshed)", flush=True)
                     last_log_time = now
             except Exception as e:
                 print(f"[VOLUME] Reload error: {e}", flush=True)
