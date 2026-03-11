@@ -485,22 +485,6 @@ def train(
     os.makedirs(ckpt_dir, exist_ok=True)
     cartridges = []  # start with no cartridge (KVFromText init)
 
-    # ---- Warm up Tokasaurus (triggers torch.compile on first request) ----
-    print(f"Warming up Tokasaurus at {tokasaurus_url} ...")
-    import asyncio as _asyncio
-    for _attempt in range(20):  # retry for up to 10 min
-        try:
-            responses = _asyncio.run(generate_batch(
-                tokasaurus_url, [tokenizer.encode("Hello")], 3, 0.7, [], max_concurrent=1
-            ))
-            if responses and responses[0]:
-                print(f"Tokasaurus warm! ({responses[0][:3]}...)")
-                break
-        except Exception as e:
-            pass
-        print(f"  Tokasaurus not ready yet (attempt {_attempt+1}/20), waiting 30s...")
-        import time as _time; _time.sleep(30)
-
     print(f"\n{'='*60}")
     print(f"OPTIMIZED ON-POLICY TRAINING (no Ray, no PPO, no FSDP)")
     print(f"  Model      : {model_name}")

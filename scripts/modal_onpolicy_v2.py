@@ -10,7 +10,7 @@ import modal
 
 TOKASAURUS_URL = "https://kiran1234c--tokasaurus-cartridge-server-serve.modal.run"
 GPU = "A100-80GB"
-WORKSPACE_VERSION = "v36-warmup-before-training"
+WORKSPACE_VERSION = "v37-toka-self-warm"
 
 image = (
     modal.Image.from_registry(

@@ -103,55 +103,36 @@ cartridge_volume = modal.Volume.from_name("onpolicy-v2-results", create_if_missi
     min_containers=1,
     max_containers=1,
     scaledown_window=3600,
-    volumes={"/results": cartridge_volume},  # same volume as training container
+    volumes={"/results": cartridge_volume},
 )
-@modal.web_server(port=PORT, startup_timeout=900)  # 15 min for compile
+@modal.web_server(port=PORT, startup_timeout=600)
 def serve():
-    """Start Tokasaurus server and warm up torch.compile before accepting requests."""
-    import subprocess
-    import time
-    import requests as http_requests
+    """Start Tokasaurus and self-warm in background thread (triggers torch.compile)."""
+    import subprocess, threading, time, requests as req
 
-    # Start Tokasaurus in background
-    subprocess.Popen(
-        [
-            "toka",
-            f"model={MODEL}",
-            f"port={PORT}",
-            # 32K tokens ≈ 3.5 GB KV cache.  Model weights ≈ 6 GB → ~10 GB total.
-            "kv_cache_num_tokens=32768",
-            # torch_compile + CUDA graphs = fastest per-request (1.33s vs 2.93s)
-            "torch_compile=True",
-            "log_level=INFO",
-        ]
-    )
+    subprocess.Popen([
+        "toka", f"model={MODEL}", f"port={PORT}",
+        "kv_cache_num_tokens=32768", "torch_compile=True", "log_level=INFO",
+    ])
 
-    # Wait for server to be ready
-    print("Waiting for Tokasaurus to start...")
-    for attempt in range(60):  # 5 min max
+    def _warmup():
+        url = f"http://localhost:{PORT}"
+        # Wait for ping to respond
+        for _ in range(60):
+            try:
+                if req.get(f"{url}/ping", timeout=5).status_code == 200:
+                    break
+            except Exception:
+                pass
+            time.sleep(5)
+        # Fire 1 real inference request to trigger torch.compile
+        print("[toka-warmup] Pinging done, firing warmup inference (torch.compile)...")
         try:
-            r = http_requests.get(f"http://localhost:{PORT}/ping", timeout=5)
-            if r.status_code == 200:
-                print(f"Tokasaurus responding to ping (attempt {attempt+1})")
-                break
-        except Exception:
-            pass
-        time.sleep(5)
-
-    # Warm up torch.compile with a real inference request
-    print("Warming up torch.compile with inference request...")
-    for attempt in range(10):  # 5 min max for compile
-        try:
-            r = http_requests.post(
-                f"http://localhost:{PORT}/custom/cartridge/completions",
+            r = req.post(f"{url}/custom/cartridge/completions",
                 json={"model": "default", "prompt": [128000, 9906], "max_tokens": 5},
-                timeout=180,  # compile can take 90s+
-            )
-            if r.status_code == 200:
-                print(f"✓ Tokasaurus warmed up and ready! (took {attempt+1} attempts)")
-                break
+                timeout=600)
+            print(f"[toka-warmup] ✓ torch.compile done, server hot! status={r.status_code}")
         except Exception as e:
-            print(f"  Warmup attempt {attempt+1}/10: {e}")
-        time.sleep(30)
+            print(f"[toka-warmup] warmup failed: {e}")
 
-    print("Tokasaurus server fully ready for requests")
+    threading.Thread(target=_warmup, daemon=True).start()
