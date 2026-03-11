@@ -77,8 +77,9 @@ image = (
         "tqdm",
         "wandb",
         "boto3",
+        "requests",  # for warmup request during server startup
     )
-    .run_commands("echo 'toka-v2-compile-fix'")
+    .run_commands("echo 'toka-v3-warmup-on-startup'")
     .run_commands(
         "pip install git+https://github.com/chandrasuda/tokasaurus.git@geoff/cartridges"
     )
@@ -104,11 +105,14 @@ cartridge_volume = modal.Volume.from_name("onpolicy-v2-results", create_if_missi
     scaledown_window=3600,
     volumes={"/results": cartridge_volume},  # same volume as training container
 )
-@modal.web_server(port=PORT, startup_timeout=600)
+@modal.web_server(port=PORT, startup_timeout=900)  # 15 min for compile
 def serve():
-    """Start Tokasaurus server. Model weights are already in the image."""
+    """Start Tokasaurus server and warm up torch.compile before accepting requests."""
     import subprocess
+    import time
+    import requests as http_requests
 
+    # Start Tokasaurus in background
     subprocess.Popen(
         [
             "toka",
@@ -121,3 +125,33 @@ def serve():
             "log_level=INFO",
         ]
     )
+
+    # Wait for server to be ready
+    print("Waiting for Tokasaurus to start...")
+    for attempt in range(60):  # 5 min max
+        try:
+            r = http_requests.get(f"http://localhost:{PORT}/ping", timeout=5)
+            if r.status_code == 200:
+                print(f"Tokasaurus responding to ping (attempt {attempt+1})")
+                break
+        except Exception:
+            pass
+        time.sleep(5)
+
+    # Warm up torch.compile with a real inference request
+    print("Warming up torch.compile with inference request...")
+    for attempt in range(10):  # 5 min max for compile
+        try:
+            r = http_requests.post(
+                f"http://localhost:{PORT}/custom/cartridge/completions",
+                json={"model": "default", "prompt": [128000, 9906], "max_tokens": 5},
+                timeout=180,  # compile can take 90s+
+            )
+            if r.status_code == 200:
+                print(f"✓ Tokasaurus warmed up and ready! (took {attempt+1} attempts)")
+                break
+        except Exception as e:
+            print(f"  Warmup attempt {attempt+1}/10: {e}")
+        time.sleep(30)
+
+    print("Tokasaurus server fully ready for requests")
