@@ -106,8 +106,10 @@ def serve():
     """Start Tokasaurus server. Model weights are already in the image."""
     import subprocess
 
-    # subprocess.run blocks until toka exits — prevents multiple toka processes
+    # subprocess.run blocks until toka exits — prevents multiple toka processes.
+    # torch_compile=False so toka starts in seconds (Modal health check passes fast).
+    # First requests are slower but toka does runtime JIT on first inference anyway.
     subprocess.run([
         "toka", f"model={MODEL}", f"port={PORT}",
-        "kv_cache_num_tokens=32768", "torch_compile=True", "log_level=INFO",
+        "kv_cache_num_tokens=32768", "torch_compile=False", "log_level=INFO",
     ])
