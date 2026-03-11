@@ -28,8 +28,10 @@ image = (
         "pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp312-cp312-linux_x86_64.whl",
         "pip install flashinfer-python==0.2.0.post2 --extra-index-url https://flashinfer.ai/whl/cu124/torch2.6/",
     )
-    .run_commands(f"echo '{WORKSPACE_VERSION}'")
     .run_commands(
+        # The echo here changes with WORKSPACE_VERSION, busting the cache for the
+        # git clone on every version bump so the latest repo code is always used.
+        f"echo '{WORKSPACE_VERSION}' && "
         "git clone --recurse-submodules --depth 1 "
         "https://github.com/chandrasuda/cartridges-workspace.git /opt/workspace"
     )
