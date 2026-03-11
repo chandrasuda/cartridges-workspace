@@ -92,9 +92,6 @@ image = (
 
 app = modal.App("tokasaurus-cartridge-server", image=image)
 
-# Shared volume with training container so cartridge syncs work via local path
-cartridge_volume = modal.Volume.from_name("onpolicy-v2-results", create_if_missing=True)
-
 
 @app.function(
     gpu=GPU,
@@ -103,36 +100,13 @@ cartridge_volume = modal.Volume.from_name("onpolicy-v2-results", create_if_missi
     min_containers=1,
     max_containers=1,
     scaledown_window=3600,
-    volumes={"/results": cartridge_volume},
 )
 @modal.web_server(port=PORT, startup_timeout=600)
 def serve():
-    """Start Tokasaurus and self-warm in background thread (triggers torch.compile)."""
-    import subprocess, threading, time, requests as req
+    """Start Tokasaurus server. Model weights are already in the image."""
+    import subprocess
 
     subprocess.Popen([
         "toka", f"model={MODEL}", f"port={PORT}",
         "kv_cache_num_tokens=32768", "torch_compile=True", "log_level=INFO",
     ])
-
-    def _warmup():
-        url = f"http://localhost:{PORT}"
-        # Wait for ping to respond
-        for _ in range(60):
-            try:
-                if req.get(f"{url}/ping", timeout=5).status_code == 200:
-                    break
-            except Exception:
-                pass
-            time.sleep(5)
-        # Fire 1 real inference request to trigger torch.compile
-        print("[toka-warmup] Pinging done, firing warmup inference (torch.compile)...")
-        try:
-            r = req.post(f"{url}/custom/cartridge/completions",
-                json={"model": "default", "prompt": [128000, 9906], "max_tokens": 5},
-                timeout=600)
-            print(f"[toka-warmup] ✓ torch.compile done, server hot! status={r.status_code}")
-        except Exception as e:
-            print(f"[toka-warmup] warmup failed: {e}")
-
-    threading.Thread(target=_warmup, daemon=True).start()
