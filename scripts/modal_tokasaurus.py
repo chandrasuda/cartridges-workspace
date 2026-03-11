@@ -104,11 +104,10 @@ app = modal.App("tokasaurus-cartridge-server", image=image)
 @modal.web_server(port=PORT, startup_timeout=600)
 def serve():
     """Start Tokasaurus server. Model weights are already in the image."""
-    import subprocess, time
+    import subprocess
 
-    subprocess.Popen([
+    # subprocess.run blocks until toka exits — prevents multiple toka processes
+    subprocess.run([
         "toka", f"model={MODEL}", f"port={PORT}",
         "kv_cache_num_tokens=32768", "torch_compile=True", "log_level=INFO",
     ])
-    # Keep serve() alive so the container doesn't exit prematurely
-    time.sleep(86400)
