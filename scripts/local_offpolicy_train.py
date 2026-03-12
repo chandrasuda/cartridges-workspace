@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """
-Off-policy cartridge training — MATCHING THE PAPER'S APPROACH.
+Off-policy cartridge training — Uses PRE-COMPUTED teacher logprobs from HF shards.
 
-Key differences from on-policy:
-1. SYNTHESIS PHASE: Generate responses AND compute teacher logprobs ONCE at step 0
-2. TRAINING PHASE: Train on pre-computed data for exactly 1 epoch (NO REUSE)
-3. Teacher model is NOT needed during training (only during synthesis)
+The HazyResearch team already synthesized ~196K QA conversations with teacher logprobs.
+This script just loads that data and trains - NO synthesis needed!
 
-This matches the paper: "No synthetically generated data is reused (i.e. training 
-proceeds for one epoch)." - Section 5, Figure 3 caption.
+Data source: hazyresearch/m07d11_longhealth_synthesize_llama-3.2-3b_p10_n65536-{0,1,2}
 """
 
 import argparse
@@ -43,7 +40,7 @@ os.environ["CARTRIDGES_DIR"] = str(CARTRIDGES_DIR)
 os.environ["CARTRIDGES_OUTPUT_DIR"] = str(WORKSPACE_DIR / "local_checkpoints")
 
 logger.info("=" * 70)
-logger.info("OFF-POLICY CARTRIDGE TRAINING")
+logger.info("OFF-POLICY CARTRIDGE TRAINING (PRE-COMPUTED LOGPROBS)")
 logger.info("=" * 70)
 
 import numpy as np
@@ -63,6 +60,8 @@ from cartridges.initialization import KVFromText
 from cartridges.models.llama.modeling_llama import FlexLlamaForCausalLM
 from cartridges.train import CacheAndModel
 from cartridges.generation import flex_generate
+from cartridges.structs import Conversation, read_conversations
+from cartridges.datasets import TrainDataset, DataSource
 
 logger.info("All modules imported successfully!")
 
@@ -452,38 +451,52 @@ def build_packed_batch_precomputed(samples, packed_seq_length=2048):
     }
 
 
+def load_hf_shard_conversations(shard_dir: str, limit: int = None) -> list:
+    """Load conversations with pre-computed logprobs from local HF shard."""
+    import pyarrow.parquet as pq
+    
+    conversations = []
+    parquet_files = sorted(Path(shard_dir).glob("*.parquet"))
+    
+    for pf in parquet_files:
+        df = pd.read_parquet(pf)
+        for _, row in df.iterrows():
+            if limit and len(conversations) >= limit:
+                break
+            conversations.append(Conversation.from_dict(row.to_dict()))
+        if limit and len(conversations) >= limit:
+            break
+    
+    return conversations[:limit] if limit else conversations
+
+
 def train_offpolicy(
     model_path: str,
-    train_parquet: str,
+    hf_shard_dir: str,
     num_tokens: int = 512,
     lr: float = 0.001,
     total_steps: int = 100,
     batch_size: int = 8,
-    max_response_length: int = 256,
-    temperature: float = 0.7,
     eval_every: int = 50,
     save_every: int = 50,
     save_dir: str = "./local_checkpoints",
     max_eval_samples: int = None,
-    max_doc_tokens: int = 4096,
 ):
     """
-    Off-policy training — MATCHING THE PAPER'S APPROACH.
+    Off-policy training using PRE-COMPUTED teacher logprobs from HF shards.
     
-    Key features:
-    1. Synthesize (total_steps * batch_size) samples with teacher logprobs
-    2. Train for exactly 1 epoch (NO data reuse)
-    3. Teacher model only needed during synthesis, not training
+    NO synthesis needed - data already has logprobs!
+    Train for 1 epoch (no data reuse) matching the paper.
     """
-    # Calculate exact number of samples needed (no reuse!)
     num_samples_needed = total_steps * batch_size
     
     logger.info("=" * 70)
-    logger.info("OFF-POLICY TRAINING (PAPER-MATCHING)")
+    logger.info("OFF-POLICY TRAINING (PRE-COMPUTED LOGPROBS)")
     logger.info("=" * 70)
     logger.info(f"  Total steps: {total_steps}")
     logger.info(f"  Batch size: {batch_size}")
-    logger.info(f"  Samples needed: {num_samples_needed} (NO REUSE - 1 epoch)")
+    logger.info(f"  Samples needed: {num_samples_needed}")
+    logger.info(f"  Data source: {hf_shard_dir}")
     logger.info("=" * 70)
     
     # Device selection
@@ -499,13 +512,12 @@ def train_offpolicy(
     
     logger.info(f"Device: {device}, dtype: {dtype}")
     
-    # Load models
+    # Load model (NO teacher model needed - logprobs are pre-computed!)
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     model_lower = model_path.lower()
     if "llama-3.2-3b-instruct" in model_lower:
         tokenizer.name_or_path = "meta-llama/Llama-3.2-3B-Instruct"
     
-    teacher_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=dtype).to(device).eval()
     flex_model = FlexLlamaForCausalLM.from_pretrained(model_path, torch_dtype=dtype).to(device).eval()
     for p in flex_model.parameters():
         p.requires_grad = False
@@ -516,55 +528,65 @@ def train_offpolicy(
         head_dim=flex_model.config.hidden_size // flex_model.config.num_attention_heads,
     )
     
-    # Load training data
-    train_df = pd.read_parquet(train_parquet)
-    # CRITICAL: Shuffle to mix patients - data is sorted by patient_id!
-    train_df = train_df.sample(frac=1, random_state=42).reset_index(drop=True)
-    logger.info(f"Loaded {len(train_df)} training prompts (SHUFFLED)")
+    # ==========================================================================
+    # LOAD PRE-COMPUTED DATA (NO SYNTHESIS!)
+    # ==========================================================================
+    logger.info("=" * 70)
+    logger.info("LOADING PRE-COMPUTED DATA WITH TEACHER LOGPROBS")
+    logger.info(f"  Source: {hf_shard_dir}")
+    logger.info(f"  Loading {num_samples_needed} samples...")
+    logger.info("=" * 70)
     
-    # Load LongHealth data directly from GitHub (MATCHES on-policy exactly)
+    load_start = time.time()
+    conversations = load_hf_shard_conversations(hf_shard_dir, limit=num_samples_needed)
+    load_elapsed = time.time() - load_start
+    logger.info(f"Loaded {len(conversations)} conversations in {load_elapsed:.1f}s")
+    
+    # Convert to training format using cartridges infrastructure
+    from cartridges.datasets import llama3_messages_to_element
+    
+    train_elements = []
+    for convo in conversations:
+        elem = llama3_messages_to_element(convo.messages, retokenize=False, tokenizer=tokenizer)
+        train_elements.append(elem)
+    logger.info(f"Converted {len(train_elements)} elements for training")
+    
+    # Shuffle for training
+    np.random.seed(42)
+    np.random.shuffle(train_elements)
+    
+    # Load LongHealth for evaluation
     logger.info("Downloading LongHealth benchmark data...")
     lh_data = requests.get(
         "https://raw.githubusercontent.com/kbressem/LongHealth/refs/heads/main/data/benchmark_v5.json"
     ).json()
     
-    # Build patient documents (MATCHES on-policy exactly)
-    patient_doc_ids = {}
+    # Build patient documents for cache initialization
     patient_doc_texts = {}
-    total_doc_tokens = 0
     for pid, patient in lh_data.items():
         doc_text = "\n\n".join(f"--- {did} ---\n{txt}" for did, txt in patient["texts"].items())
         patient_doc_texts[pid] = doc_text
-        patient_doc_ids[pid] = tokenizer.encode(doc_text, add_special_tokens=False)
-        total_doc_tokens += len(patient_doc_ids[pid])
-    logger.info(f"Loaded {len(patient_doc_ids)} patient documents, {total_doc_tokens:,} total tokens")
     
-    # Load evaluation questions (MATCHES on-policy exactly)
+    # Load evaluation questions
     EVAL_PATIENT_IDS = {f"patient_{i:02d}" for i in range(1, 11)}
     eval_questions = load_eval_questions(lh_data, EVAL_PATIENT_IDS)
-    # Shuffle for balanced coverage when using max_eval_samples
-    np.random.seed(42)
     np.random.shuffle(eval_questions)
-    logger.info(f"Loaded {len(eval_questions)} eval questions (SHUFFLED for balanced coverage)")
+    logger.info(f"Loaded {len(eval_questions)} eval questions")
     
-    # Initialize cache from patient documents (MATCHES on-policy exactly)
-    training_patients = sorted(train_df["patient_id"].unique())
+    # Initialize cache from patient documents
+    training_patients = list(patient_doc_texts.keys())[:10]  # Use first 10 patients
     tokens_per_patient = num_tokens // len(training_patients)
     init_text_parts = []
     for pid in training_patients:
-        if pid in patient_doc_texts:
-            # Get the first portion of this patient's document
-            doc_text = patient_doc_texts[pid]
-            # Truncate to approximately tokens_per_patient worth of text
-            char_limit = tokens_per_patient * 4
-            init_text_parts.append(doc_text[:char_limit])
+        doc_text = patient_doc_texts[pid]
+        char_limit = tokens_per_patient * 4
+        init_text_parts.append(doc_text[:char_limit])
     init_text = "\n\n".join(init_text_parts)
     
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
         f.write(init_text)
         init_file = f.name
     
-    # Initialize cache using the Config pattern (matches on-policy script)
     initializer = KVFromText.Config(
         max_tokens=num_tokens,
         text_source=init_file,
@@ -577,86 +599,11 @@ def train_offpolicy(
     wrapped_model = CacheAndModel(cache, flex_model)
     optimizer = optim.Adam(cache.parameters(), lr=lr)
     
-    # Setup save directory
+    # Setup
     os.makedirs(save_dir, exist_ok=True)
     eval_results = []
-    
-    # Token tracking
     total_tokens = 0
     token_history = []
-    
-    # ==========================================================================
-    # SYNTHESIS PHASE: Generate responses AND compute logprobs ONCE
-    # This matches the paper: logprobs are computed during synthesis, not training
-    # ==========================================================================
-    logger.info("=" * 70)
-    logger.info(f"SYNTHESIS: Generating {num_samples_needed} samples WITH teacher logprobs")
-    logger.info("  Teacher model computes logprobs ONCE during generation")
-    logger.info("  NO teacher model needed during training phase")
-    logger.info("=" * 70)
-    
-    # Collect prompts grouped by patient for efficient generation
-    prompts_by_patient = {}
-    for i in range(num_samples_needed):
-        row = train_df.iloc[i % len(train_df)]
-        messages = row["prompt"]
-        if isinstance(messages, str):
-            messages = json.loads(messages)
-        patient_id = row["patient_id"]
-        prompt_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
-        prompts_by_patient.setdefault(patient_id, []).append({
-            "prompt_ids": prompt_ids,
-            "patient_id": patient_id,
-            "index": i,
-        })
-    
-    # Synthesize: generate responses AND compute teacher logprobs in one pass
-    synthesized_data = []
-    synth_start = time.time()
-    synth_count = 0
-    
-    for patient_id, patient_prompts in prompts_by_patient.items():
-        doc_ids = patient_doc_ids.get(patient_id, [])
-        if len(doc_ids) > max_doc_tokens:
-            doc_ids = doc_ids[:max_doc_tokens]
-        
-        prompt_ids_list = [p["prompt_ids"] for p in patient_prompts]
-        
-        # Track synthesis tokens
-        for prompt_ids in prompt_ids_list:
-            total_tokens += len(doc_ids) + len(prompt_ids)
-        
-        # Generate AND compute logprobs in one pass (paper's approach)
-        results = synthesize_with_teacher(
-            teacher_model, tokenizer, doc_ids, prompt_ids_list,
-            max_response_length, temperature, device, top_k=20
-        )
-        
-        # Track response tokens
-        for r in results:
-            total_tokens += len(r["response_ids"])
-        
-        for prompt_data, result in zip(patient_prompts, results):
-            synthesized_data.append({
-                "prompt_ids": result["prompt_ids"],
-                "response_ids": result["response_ids"],
-                "topk_token_ids": result["topk_token_ids"],  # Pre-computed!
-                "topk_logprobs": result["topk_logprobs"],    # Pre-computed!
-                "patient_id": patient_id,
-            })
-        
-        synth_count += len(patient_prompts)
-        logger.info(f"  Synthesized {synth_count}/{num_samples_needed} (patient {patient_id})")
-        cleanup_memory(device)
-    
-    synth_elapsed = time.time() - synth_start
-    logger.info(f"Synthesis complete: {len(synthesized_data)} samples in {synth_elapsed:.1f}s")
-    logger.info(f"Synthesis tokens: {total_tokens:,}")
-    
-    # Free teacher model - NOT NEEDED during training!
-    del teacher_model
-    cleanup_memory(device)
-    logger.info("Teacher model freed - not needed for training phase")
     
     # Step 0 evaluation
     eval_result = evaluate_cache(
@@ -678,17 +625,13 @@ def train_offpolicy(
     
     # ==========================================================================
     # TRAINING LOOP - 1 EPOCH, NO REUSE (matches paper)
-    # Uses PRE-COMPUTED logprobs - NO teacher model needed!
+    # Uses PRE-COMPUTED logprobs from HF shards!
     # ==========================================================================
     logger.info("=" * 70)
-    logger.info("TRAINING: 1 epoch on synthesized data (NO REUSE)")
-    logger.info("  Using PRE-COMPUTED teacher logprobs")
-    logger.info("  NO teacher model computation during training")
+    logger.info("TRAINING: 1 epoch on pre-computed data (NO REUSE)")
+    logger.info("  Using PRE-COMPUTED teacher logprobs from HF shards")
+    logger.info("  NO teacher model needed!")
     logger.info("=" * 70)
-    
-    # Shuffle synthesized data once at start (paper does this)
-    np.random.seed(42)
-    np.random.shuffle(synthesized_data)
     
     for step in range(1, total_steps + 1):
         cleanup_memory(device)
@@ -697,67 +640,75 @@ def train_offpolicy(
         
         # Get batch - each sample used EXACTLY ONCE (no cycling!)
         batch_start = (step - 1) * batch_size
-        batch_end = min(batch_start + batch_size, len(synthesized_data))
-        batch_data = synthesized_data[batch_start:batch_end]
+        batch_end = min(batch_start + batch_size, len(train_elements))
+        batch_elements = train_elements[batch_start:batch_end]
         
-        if not batch_data:
+        if not batch_elements:
             logger.warning(f"No more data at step {step}, stopping early")
             break
         
-        # Convert pre-computed data to training format
-        all_samples = []
-        for item in batch_data:
-            # Use PRE-COMPUTED logprobs (no teacher needed!)
-            all_samples.append({
-                "prompt_ids": item["prompt_ids"],
-                "response_ids": item["response_ids"],
-                "topk_token_ids": item["topk_token_ids"],
-                "topk_logprobs": item["topk_logprobs"],
-            })
-        
-        # Train on batch
+        # Train on batch using cartridges DatasetElement format
         train_t0 = time.time()
         
         accum_loss = 0.0
-        n_batches = 0
         optimizer.zero_grad()
         
-        i = 0
-        while i < len(all_samples):
-            batch = build_packed_batch_precomputed(all_samples[i:])
-            packed_count = batch["element_ids"].max().item() + 1
-            i += max(packed_count, 1)
+        # Pack elements into a batch
+        input_ids_list, element_ids_list, position_ids_list = [], [], []
+        topk_ids_list, topk_lps_list, topk_idxs_list = [], [], []
+        curr_offset = 0
+        
+        for elem_id, elem in enumerate(batch_elements):
+            seq_len = len(elem.input_ids)
+            input_ids_list.append(elem.input_ids)
+            element_ids_list.append(torch.full((seq_len,), elem_id, dtype=torch.long))
+            position_ids_list.append(torch.arange(seq_len, dtype=torch.long))
             
-            # Track training tokens
-            total_tokens += len(batch["input_ids"])
+            if elem.topk_token_ids is not None and len(elem.topk_token_ids) > 0:
+                topk_ids_list.append(elem.topk_token_ids)
+                topk_lps_list.append(elem.topk_logprobs)
+                topk_idxs_list.append(elem.topk_token_idxs + curr_offset)
+            
+            curr_offset += seq_len
+        
+        input_ids = torch.cat(input_ids_list)
+        element_ids = torch.cat(element_ids_list)
+        position_ids = torch.cat(position_ids_list)
+        
+        # Track training tokens
+        total_tokens += len(input_ids)
+        
+        if topk_ids_list:
+            topk_token_ids = torch.cat(topk_ids_list)
+            topk_logprobs = torch.cat(topk_lps_list)
+            topk_token_idxs = torch.cat(topk_idxs_list)
             
             cache.clear()
             outputs = wrapped_model(
-                input_ids=batch["input_ids"].to(device),
-                seq_ids=batch["element_ids"].to(device),
-                position_ids=batch["position_ids"].to(device),
+                input_ids=input_ids.unsqueeze(0).to(device),
+                seq_ids=element_ids.unsqueeze(0).to(device),
+                position_ids=position_ids.unsqueeze(0).to(device),
             )
             
-            topk_pred_logprobs = F.log_softmax(outputs.logits, dim=-1)[
+            # Compute loss using pre-computed teacher logprobs
+            topk_pred_logprobs = F.log_softmax(outputs.logits.float(), dim=-1)[
                 0,
-                batch["topk_token_idxs"].to(device) - 1,
-                batch["topk_token_ids"].to(device),
+                topk_token_idxs.to(device) - 1,
+                topk_token_ids.to(device),
             ]
             
-            ce_by_token = -batch["topk_logprobs"].to(device).exp() * topk_pred_logprobs
+            ce_by_token = -topk_logprobs.to(device).float().exp() * topk_pred_logprobs
             loss = ce_by_token.mean()
             
             loss.backward()
-            accum_loss += loss.detach().item()
-            n_batches += 1
+            accum_loss = loss.detach().item()
         
         optimizer.step()
         optimizer.zero_grad()
         train_elapsed = time.time() - train_t0
         step_elapsed = time.time() - step_t0
         
-        avg_loss = accum_loss / max(n_batches, 1)
-        logger.info(f"Step {step}: loss={avg_loss:.4f} | train={train_elapsed:.1f}s | total={step_elapsed:.1f}s | tokens={total_tokens:,}")
+        logger.info(f"Step {step}: loss={accum_loss:.4f} | train={train_elapsed:.1f}s | total={step_elapsed:.1f}s | tokens={total_tokens:,}")
         
         # Evaluate (every eval_every steps or final step)
         if step % eval_every == 0 or step == total_steps:
@@ -789,8 +740,9 @@ def train_offpolicy(
             "eval_results": eval_results,
             "token_history": token_history,
             "config": {
-                "mode": "off-policy (paper-matching)",
-                "num_synthesized": num_samples_needed,
+                "mode": "off-policy (pre-computed logprobs)",
+                "data_source": hf_shard_dir,
+                "num_samples": len(train_elements),
                 "total_steps": total_steps,
                 "batch_size": batch_size,
                 "lr": lr,
@@ -808,9 +760,9 @@ def train_offpolicy(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Off-policy cartridge training (paper-matching)")
+    parser = argparse.ArgumentParser(description="Off-policy cartridge training (pre-computed logprobs)")
     parser.add_argument("--model", required=True, help="Path to model")
-    parser.add_argument("--train-parquet", required=True, help="Training data parquet")
+    parser.add_argument("--hf-shard-dir", required=True, help="Directory with HF shard parquets (has pre-computed logprobs)")
     parser.add_argument("--num-tokens", type=int, default=512, help="Cache size")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
     parser.add_argument("--total-steps", type=int, default=500, help="Training steps")
@@ -819,20 +771,17 @@ def main():
     parser.add_argument("--save-every", type=int, default=50, help="Save checkpoint every N steps")
     parser.add_argument("--save-dir", type=str, default="./local_checkpoints/off_policy_run")
     parser.add_argument("--max-eval-samples", type=int, default=None, help="Limit eval samples (default: all)")
-    parser.add_argument("--max-doc-tokens", type=int, default=4096)
-    # NOTE: No --num-pregenerated! Paper-matching version auto-calculates:
-    #       num_samples = total_steps * batch_size (NO REUSE)
     
     args = parser.parse_args()
     
     logger.info("Arguments:")
     for k, v in vars(args).items():
         logger.info(f"  --{k}: {v}")
-    logger.info(f"  [AUTO] Samples to synthesize: {args.total_steps * args.batch_size} (total_steps × batch_size)")
+    logger.info(f"  Samples needed: {args.total_steps * args.batch_size} (total_steps × batch_size)")
     
     train_offpolicy(
         model_path=args.model,
-        train_parquet=args.train_parquet,
+        hf_shard_dir=args.hf_shard_dir,
         num_tokens=args.num_tokens,
         lr=args.lr,
         total_steps=args.total_steps,
@@ -841,7 +790,6 @@ def main():
         save_every=args.save_every,
         save_dir=args.save_dir,
         max_eval_samples=args.max_eval_samples,
-        max_doc_tokens=args.max_doc_tokens,
     )
 
 

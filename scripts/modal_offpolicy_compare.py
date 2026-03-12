@@ -1,13 +1,10 @@
 """
-Off-policy cartridge training on Modal — PAPER-MATCHING VERSION.
+Off-policy cartridge training on Modal — Uses PRE-COMPUTED teacher logprobs.
 
-Key differences from on-policy:
-1. SYNTHESIS PHASE: Generate (total_steps × batch_size) samples with teacher logprobs
-2. TRAINING PHASE: Train for exactly 1 epoch (NO DATA REUSE)
-3. Teacher model only needed during synthesis, not training
+The HazyResearch team already synthesized ~196K QA conversations with teacher logprobs.
+This script just loads that data and trains - NO synthesis needed!
 
-This matches the paper: "No synthetically generated data is reused (i.e. training
-proceeds for one epoch)." - Section 5, Figure 3 caption.
+Data source: hazyresearch/m07d11_longhealth_synthesize_llama-3.2-3b_p10_n65536-{0,1,2}
 
 Usage:
     modal run --detach scripts/modal_offpolicy_compare.py
@@ -15,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v54-paper-matching"
+WORKSPACE_VERSION = "v55-precomputed-logprobs"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
@@ -47,7 +44,7 @@ image = (
         "&& pip install -e /opt/workspace/tokasaurus"
     )
     .pip_install(
-        "requests", "transformers==4.53.0", "pandas", "pyarrow",
+        "requests", "transformers==4.53.0", "pandas", "pyarrow", "huggingface_hub",
     )
 )
 
@@ -65,21 +62,32 @@ app = modal.App("offpolicy-compare", image=image)
     volumes={"/results": results_volume},
 )
 def train(total_steps: int = 500, batch_size: int = 4, lr: float = 0.02, eval_every: int = 50, save_every: int = 50):
-    """Run off-policy training (paper-matching: 1 epoch, no data reuse)."""
+    """Run off-policy training using PRE-COMPUTED teacher logprobs from HF."""
     import subprocess, os, sys
+    from huggingface_hub import snapshot_download
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
 
-    train_parquet = "/opt/workspace/data/on_policy/train.parquet"
-    assert os.path.exists(train_parquet), f"Missing {train_parquet}"
+    # Download HF shard with pre-computed logprobs
+    print("Downloading HF shard with pre-computed teacher logprobs...")
+    hf_shard_dir = snapshot_download(
+        repo_id="hazyresearch/m07d11_longhealth_synthesize_llama-3.2-3b_p10_n65536-0",
+        repo_type="dataset",
+        local_dir="/opt/hf_shard",
+    )
+    print(f"Downloaded to: {hf_shard_dir}")
+    
+    # The parquets are in data/ subdirectory
+    data_dir = os.path.join(hf_shard_dir, "data")
+    if not os.path.exists(data_dir):
+        data_dir = hf_shard_dir  # Fallback if no data/ subdir
+    print(f"Using data dir: {data_dir}")
 
-    # Paper-matching: auto-calculates num_samples = total_steps × batch_size
-    # NO --num-pregenerated argument needed!
     cmd = [
         sys.executable, "/opt/workspace/scripts/local_offpolicy_train.py",
         "--model", "meta-llama/Llama-3.2-3B-Instruct",
-        "--train-parquet", train_parquet,
+        "--hf-shard-dir", data_dir,
         "--num-tokens", "512",
         "--lr", str(lr),
         "--total-steps", str(total_steps),
@@ -89,8 +97,8 @@ def train(total_steps: int = 500, batch_size: int = 4, lr: float = 0.02, eval_ev
         "--save-dir", "/results/offpolicy",
     ]  # No --max-eval-samples means full eval
 
-    print(f"Running off-policy training (paper-matching): {' '.join(cmd)}")
-    print(f"  Will synthesize {total_steps * batch_size} samples with teacher logprobs")
+    print(f"Running off-policy training (pre-computed logprobs): {' '.join(cmd)}")
+    print(f"  Using PRE-COMPUTED teacher logprobs from HF shard")
     print(f"  Train for exactly 1 epoch (NO DATA REUSE)")
     result = subprocess.run(cmd, env=env, stdout=sys.stdout, stderr=sys.stderr)
     
@@ -107,11 +115,12 @@ def main(
     save_every: int = 50,
 ):
     print("=" * 70)
-    print("OFF-POLICY TRAINING (PAPER-MATCHING)")
+    print("OFF-POLICY TRAINING (PRE-COMPUTED LOGPROBS)")
     print("=" * 70)
     print(f"  total_steps: {total_steps}")
     print(f"  batch_size: {batch_size}")
-    print(f"  samples to synthesize: {total_steps * batch_size} (NO REUSE)")
+    print(f"  samples to load: {total_steps * batch_size}")
+    print(f"  data: HF shard with pre-computed teacher logprobs")
     print("=" * 70)
     
     exit_code = train.remote(
