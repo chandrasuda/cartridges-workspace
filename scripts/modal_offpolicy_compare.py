@@ -15,7 +15,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v53-overnight"
+WORKSPACE_VERSION = "v54-paper-matching"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
