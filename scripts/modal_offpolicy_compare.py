@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v61-persistent-logs"
+WORKSPACE_VERSION = "v64-lr005-overnight"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
@@ -61,7 +61,7 @@ app = modal.App("offpolicy-compare", image=image)
     scaledown_window=600,
     volumes={"/results": results_volume},
 )
-def train(total_steps: int = 1000, batch_size: int = 4, lr: float = 0.02, eval_every: int = 50, save_every: int = 50):
+def train(total_steps: int = 1000, batch_size: int = 4, lr: float = 0.005, eval_every: int = 50, save_every: int = 50):
     """Run off-policy training using PRE-COMPUTED teacher logprobs from HF."""
     import subprocess, os, sys
     from huggingface_hub import snapshot_download
@@ -110,7 +110,7 @@ def train(total_steps: int = 1000, batch_size: int = 4, lr: float = 0.02, eval_e
 def main(
     total_steps: int = 1000,
     batch_size: int = 4,
-    lr: float = 0.02,
+    lr: float = 0.005,
     eval_every: int = 50,
     save_every: int = 50,
 ):
