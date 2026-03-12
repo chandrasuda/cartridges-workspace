@@ -9,7 +9,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v60-intermediate-save"
+WORKSPACE_VERSION = "v61-persistent-logs"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 

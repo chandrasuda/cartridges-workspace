@@ -601,6 +601,15 @@ def train_offpolicy(
     
     # Setup
     os.makedirs(save_dir, exist_ok=True)
+    
+    # Add file handler for persistent logging
+    log_file_path = os.path.join(save_dir, "training.log")
+    file_handler = logging.FileHandler(log_file_path, mode='w')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s'))
+    logger.addHandler(file_handler)
+    logger.info(f"  - Log file: {log_file_path}")
+    
     eval_results = []
     total_tokens = 0
     token_history = []

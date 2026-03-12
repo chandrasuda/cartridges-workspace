@@ -184,9 +184,8 @@ def evaluate_cache(
         if pred == q["correct"]:
             correct_count += 1
         
-        # Log first few examples
-        if qi < 3:
-            logger.debug(f"    Q{qi}: pred={pred} correct={q['correct']}")
+        # Log all predictions (to persistent log file)
+        logger.debug(f"    Q{qi}: pred='{pred}' correct='{q['correct']}' | gen='{gen_text[:50]}...' ")
         
         # Progress every 20 questions
         if (qi + 1) % 20 == 0:
@@ -595,6 +594,14 @@ def train(
 
     os.makedirs(save_dir, exist_ok=True)
     logger.info(f"  - Save directory: {save_dir}")
+    
+    # Add file handler for persistent logging
+    log_file_path = os.path.join(save_dir, "training.log")
+    file_handler = logging.FileHandler(log_file_path, mode='w')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s'))
+    logger.addHandler(file_handler)
+    logger.info(f"  - Log file: {log_file_path}")
     
     # Track evaluation results
     eval_results = []
