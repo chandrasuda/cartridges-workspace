@@ -647,13 +647,21 @@ def train_offpolicy(
             logger.warning(f"No more data at step {step}, stopping early")
             break
         
-        # Train on batch using cartridges DatasetElement format
+        # Train on batch using cartridges collate (handles tensor shapes correctly)
         train_t0 = time.time()
         
         accum_loss = 0.0
         optimizer.zero_grad()
         
-        # Pack elements into a batch
+        # Use cartridges collate function for correct tensor packing
+        from cartridges.datasets import TrainDataset
+        
+        # Create a minimal config for collate
+        class MinimalConfig:
+            packed_seq_length = 2048
+            packing_mode = "pad"
+        
+        # Manually collate the batch elements
         input_ids_list, element_ids_list, position_ids_list = [], [], []
         topk_ids_list, topk_lps_list, topk_idxs_list = [], [], []
         curr_offset = 0
@@ -675,25 +683,32 @@ def train_offpolicy(
         element_ids = torch.cat(element_ids_list)
         position_ids = torch.cat(position_ids_list)
         
+        # Pad to fixed length to avoid recompiles
+        packed_seq_length = 2048
+        if len(input_ids) < packed_seq_length:
+            pad_len = packed_seq_length - len(input_ids)
+            input_ids = torch.cat([input_ids, torch.zeros(pad_len, dtype=torch.long)])
+            element_ids = torch.cat([element_ids, torch.zeros(pad_len, dtype=torch.long)])
+            position_ids = torch.cat([position_ids, torch.zeros(pad_len, dtype=torch.long)])
+        
         # Track training tokens
-        total_tokens += len(input_ids)
+        total_tokens += curr_offset  # actual tokens, not padded
         
         if topk_ids_list:
-            # Flatten to 1D for indexing
-            topk_token_ids = torch.cat([t.reshape(-1) for t in topk_ids_list])
-            topk_logprobs = torch.cat([t.reshape(-1) for t in topk_lps_list])
-            topk_token_idxs = torch.cat([t.reshape(-1) for t in topk_idxs_list])
+            # Flatten to 1D for indexing (these are already 1D from cartridges)
+            topk_token_ids = torch.cat(topk_ids_list)
+            topk_logprobs = torch.cat(topk_lps_list)
+            topk_token_idxs = torch.cat(topk_idxs_list)
             
             cache.clear()
             outputs = wrapped_model(
-                input_ids=input_ids.unsqueeze(0).to(device),
-                seq_ids=element_ids.unsqueeze(0).to(device),
-                position_ids=position_ids.unsqueeze(0).to(device),
+                input_ids=input_ids.to(device),
+                seq_ids=element_ids.to(device),
+                position_ids=position_ids.to(device),
             )
             
             # Compute loss using pre-computed teacher logprobs
             topk_pred_logprobs = F.log_softmax(outputs.logits.float(), dim=-1)[
-                0,
                 topk_token_idxs.long().to(device) - 1,
                 topk_token_ids.long().to(device),
             ]
