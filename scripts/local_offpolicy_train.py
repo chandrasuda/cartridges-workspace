@@ -618,6 +618,16 @@ def train_offpolicy(
     eval_results.append(eval_result)
     token_history.append({"step": 0, "tokens": total_tokens, "accuracy": eval_result["accuracy"]})
     
+    # Save initial results (crash protection)
+    results_path = os.path.join(save_dir, "offpolicy_results.json")
+    with open(results_path, "w") as f:
+        json.dump({
+            "eval_results": eval_results,
+            "token_history": token_history,
+            "config": {"mode": "off-policy", "total_steps": total_steps, "batch_size": batch_size, "lr": lr}
+        }, f, indent=2)
+    logger.info(f"  - Results saved: {results_path}")
+    
     # Save step-0 checkpoint
     ckpt_path = os.path.join(save_dir, "step-0", "cartridge.pt")
     os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
@@ -741,6 +751,16 @@ def train_offpolicy(
             )
             eval_results.append(eval_result)
             token_history.append({"step": step, "tokens": total_tokens, "accuracy": eval_result["accuracy"]})
+            
+            # Save intermediate results (crash protection)
+            results_path = os.path.join(save_dir, "offpolicy_results.json")
+            with open(results_path, "w") as f:
+                json.dump({
+                    "eval_results": eval_results,
+                    "token_history": token_history,
+                    "config": {"mode": "off-policy", "total_steps": total_steps, "batch_size": batch_size, "lr": lr}
+                }, f, indent=2)
+            logger.info(f"  - Results saved: {results_path}")
         
         # Save checkpoint (every save_every steps or final step)
         if step % save_every == 0 or step == total_steps:

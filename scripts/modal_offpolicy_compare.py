@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v59-fix-batch-dim"
+WORKSPACE_VERSION = "v60-intermediate-save"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
