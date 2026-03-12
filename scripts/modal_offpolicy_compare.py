@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v55-precomputed-logprobs"
+WORKSPACE_VERSION = "v56-tensor-fix"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
