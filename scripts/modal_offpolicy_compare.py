@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v56-tensor-fix"
+WORKSPACE_VERSION = "v57-force-rebuild"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
