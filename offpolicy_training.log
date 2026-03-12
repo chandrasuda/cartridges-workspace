@@ -64,3 +64,9 @@
 2026-03-12 02:40:49 | INFO     | local_offpolicy_train |   [EVAL] Evaluating at step 2...
 2026-03-12 02:41:37 | INFO     | local_offpolicy_train |   [EVAL] Step 2: 1/50 = 2.0% (47.8s)
 2026-03-12 02:41:39 | INFO     | local_offpolicy_train | --- STEP 3/5 ---
+2026-03-12 02:44:33 | INFO     | local_offpolicy_train | Step 3: loss=0.0535 | teacher=101.9s | train=72.4s | total=174.3s | tokens=144,883
+2026-03-12 02:44:33 | INFO     | local_offpolicy_train |   [EVAL] Evaluating at step 3...
+2026-03-12 02:44:59 | INFO     | local_offpolicy_train |   [EVAL] Step 3: 1/50 = 2.0% (26.0s)
+2026-03-12 02:45:00 | INFO     | local_offpolicy_train | --- STEP 4/5 ---
+/Users/csuda/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/lib/python3.12/multiprocessing/resource_tracker.py:279: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '

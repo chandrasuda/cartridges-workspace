@@ -378,6 +378,8 @@ def train_offpolicy(
     batch_size: int = 8,
     max_response_length: int = 256,
     temperature: float = 0.7,
+    eval_every: int = 50,
+    save_every: int = 50,
     save_dir: str = "./local_checkpoints",
     max_eval_samples: int = None,
     max_doc_tokens: int = 4096,
@@ -661,23 +663,26 @@ def train_offpolicy(
         avg_loss = accum_loss / max(n_batches, 1)
         logger.info(f"Step {step}: loss={avg_loss:.4f} | teacher={teacher_elapsed:.1f}s | train={train_elapsed:.1f}s | total={step_elapsed:.1f}s | tokens={total_tokens:,}")
         
-        # Evaluate
-        eval_result = evaluate_cache(
-            flex_model=flex_model,
-            tokenizer=tokenizer,
-            cache=cache,
-            eval_questions=eval_questions,
-            device=device,
-            step=step,
-            max_eval_samples=max_eval_samples,
-        )
-        eval_results.append(eval_result)
-        token_history.append({"step": step, "tokens": total_tokens, "accuracy": eval_result["accuracy"]})
+        # Evaluate (every eval_every steps or final step)
+        if step % eval_every == 0 or step == total_steps:
+            eval_result = evaluate_cache(
+                flex_model=flex_model,
+                tokenizer=tokenizer,
+                cache=cache,
+                eval_questions=eval_questions,
+                device=device,
+                step=step,
+                max_eval_samples=max_eval_samples,
+            )
+            eval_results.append(eval_result)
+            token_history.append({"step": step, "tokens": total_tokens, "accuracy": eval_result["accuracy"]})
         
-        # Save checkpoint
-        ckpt_path = os.path.join(save_dir, f"step-{step}", "cartridge.pt")
-        os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
-        cache.save(ckpt_path)
+        # Save checkpoint (every save_every steps or final step)
+        if step % save_every == 0 or step == total_steps:
+            ckpt_path = os.path.join(save_dir, f"step-{step}", "cartridge.pt")
+            os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+            cache.save(ckpt_path)
+            logger.info(f"  - Checkpoint saved: {ckpt_path}")
         
         cleanup_memory(device)
     
@@ -711,12 +716,14 @@ def main():
     parser.add_argument("--train-parquet", required=True, help="Training data parquet")
     parser.add_argument("--num-tokens", type=int, default=512, help="Cache size")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
-    parser.add_argument("--total-steps", type=int, default=30, help="Training steps")
+    parser.add_argument("--total-steps", type=int, default=500, help="Training steps")
     parser.add_argument("--batch-size", type=int, default=4, help="Batch size")
+    parser.add_argument("--eval-every", type=int, default=50, help="Evaluate every N steps")
+    parser.add_argument("--save-every", type=int, default=50, help="Save checkpoint every N steps")
     parser.add_argument("--save-dir", type=str, default="./local_checkpoints/off_policy_run")
-    parser.add_argument("--max-eval-samples", type=int, default=50)
+    parser.add_argument("--max-eval-samples", type=int, default=None, help="Limit eval samples (default: all)")
     parser.add_argument("--max-doc-tokens", type=int, default=4096)
-    parser.add_argument("--num-pregenerated", type=int, default=100, help="Number of responses to pre-generate")
+    parser.add_argument("--num-pregenerated", type=int, default=200, help="Number of responses to pre-generate")
     
     args = parser.parse_args()
     
@@ -731,6 +738,8 @@ def main():
         lr=args.lr,
         total_steps=args.total_steps,
         batch_size=args.batch_size,
+        eval_every=args.eval_every,
+        save_every=args.save_every,
         save_dir=args.save_dir,
         max_eval_samples=args.max_eval_samples,
         max_doc_tokens=args.max_doc_tokens,

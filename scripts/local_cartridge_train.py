@@ -416,7 +416,8 @@ def train(
     batch_size: int = 8,  # Smaller for local
     max_response_length: int = 256,
     temperature: float = 0.7,
-    eval_every: int = 25,
+    eval_every: int = 50,
+    save_every: int = 50,
     save_dir: str = "./local_checkpoints",
     max_eval_samples: int = None,
     max_doc_tokens: int = 4096,
@@ -770,24 +771,26 @@ def train(
         avg_loss = accum_loss / max(n_batches, 1)
         logger.info(f"Step {step}: loss={avg_loss:.4f} | gen={gen_elapsed:.1f}s | teacher={teacher_elapsed:.1f}s | train={train_elapsed:.1f}s | total={step_elapsed:.1f}s | tokens={total_tokens:,}")
 
-        # 5. Evaluate on test set (every step)
-        eval_result = evaluate_cache(
-            flex_model=flex_model,
-            tokenizer=tokenizer,
-            cache=cache,
-            eval_questions=eval_questions,
-            device=device,
-            step=step,
-            max_eval_samples=max_eval_samples,
-        )
-        eval_results.append(eval_result)
-        token_history.append({"step": step, "tokens": total_tokens, "accuracy": eval_result["accuracy"]})
+        # 5. Evaluate on test set (every eval_every steps or final step)
+        if step % eval_every == 0 or step == total_steps:
+            eval_result = evaluate_cache(
+                flex_model=flex_model,
+                tokenizer=tokenizer,
+                cache=cache,
+                eval_questions=eval_questions,
+                device=device,
+                step=step,
+                max_eval_samples=max_eval_samples,
+            )
+            eval_results.append(eval_result)
+            token_history.append({"step": step, "tokens": total_tokens, "accuracy": eval_result["accuracy"]})
         
-        # 6. Save checkpoint (every step)
-        ckpt_path = os.path.join(save_dir, f"step-{step}", "cartridge.pt")
-        os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
-        cache.save(ckpt_path)
-        logger.info(f"  - Checkpoint saved: {ckpt_path}")
+        # 6. Save checkpoint (every save_every steps or final step)
+        if step % save_every == 0 or step == total_steps:
+            ckpt_path = os.path.join(save_dir, f"step-{step}", "cartridge.pt")
+            os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+            cache.save(ckpt_path)
+            logger.info(f"  - Checkpoint saved: {ckpt_path}")
         
         # 7. Aggressive memory cleanup after step
         del all_samples, by_patient
@@ -855,8 +858,10 @@ if __name__ == "__main__":
                         help="Total number of training steps")
     parser.add_argument("--batch-size", type=int, default=8,
                         help="Batch size (number of prompts per step)")
-    parser.add_argument("--eval-every", type=int, default=25,
+    parser.add_argument("--eval-every", type=int, default=50,
                         help="Evaluate every N steps")
+    parser.add_argument("--save-every", type=int, default=50,
+                        help="Save checkpoint every N steps")
     parser.add_argument("--save-dir", default="./local_checkpoints",
                         help="Directory to save checkpoints")
     parser.add_argument("--debug", action="store_true",
@@ -889,6 +894,7 @@ if __name__ == "__main__":
             total_steps=args.total_steps,
             batch_size=args.batch_size,
             eval_every=args.eval_every,
+            save_every=args.save_every,
             save_dir=args.save_dir,
             max_eval_samples=args.max_eval_samples,
             max_doc_tokens=args.max_doc_tokens,

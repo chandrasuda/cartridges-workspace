@@ -9,8 +9,9 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v52-nosubmodules"
+WORKSPACE_VERSION = "v53-overnight"
 GPU = "A100-80GB"
+TIMEOUT_HOURS = 24
 
 image = (
     modal.Image.from_registry(
@@ -51,14 +52,14 @@ app = modal.App("onpolicy-compare", image=image)
 @app.function(
     gpu=GPU,
     secrets=[modal.Secret.from_name("huggingface-secret")],
-    timeout=86400,
+    timeout=TIMEOUT_HOURS * 3600,
     min_containers=0,
     max_containers=1,
     scaledown_window=600,
     volumes={"/results": results_volume},
 )
-def train(total_steps: int = 5, batch_size: int = 4, lr: float = 0.02, max_eval_samples: int = 50):
-    """Run on-policy training with token tracking."""
+def train(total_steps: int = 500, batch_size: int = 4, lr: float = 0.02, eval_every: int = 50, save_every: int = 50):
+    """Run on-policy training overnight with full eval every N steps."""
     import subprocess, os, sys
 
     env = os.environ.copy()
@@ -75,9 +76,10 @@ def train(total_steps: int = 5, batch_size: int = 4, lr: float = 0.02, max_eval_
         "--lr", str(lr),
         "--total-steps", str(total_steps),
         "--batch-size", str(batch_size),
-        "--max-eval-samples", str(max_eval_samples),
+        "--eval-every", str(eval_every),
+        "--save-every", str(save_every),
         "--save-dir", "/results/onpolicy",
-    ]
+    ]  # No --max-eval-samples means full eval
 
     print(f"Running on-policy training: {' '.join(cmd)}")
     result = subprocess.run(cmd, env=env, stdout=sys.stdout, stderr=sys.stderr)
@@ -88,15 +90,17 @@ def train(total_steps: int = 5, batch_size: int = 4, lr: float = 0.02, max_eval_
 
 @app.local_entrypoint()
 def main(
-    total_steps: int = 5,
+    total_steps: int = 500,
     batch_size: int = 4,
     lr: float = 0.02,
-    max_eval_samples: int = 50,
+    eval_every: int = 50,
+    save_every: int = 50,
 ):
     exit_code = train.remote(
         total_steps=total_steps,
         batch_size=batch_size,
         lr=lr,
-        max_eval_samples=max_eval_samples,
+        eval_every=eval_every,
+        save_every=save_every,
     )
     print(f"Training finished with exit code: {exit_code}")
