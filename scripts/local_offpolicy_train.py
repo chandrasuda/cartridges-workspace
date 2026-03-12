@@ -679,9 +679,10 @@ def train_offpolicy(
         total_tokens += len(input_ids)
         
         if topk_ids_list:
-            topk_token_ids = torch.cat(topk_ids_list)
-            topk_logprobs = torch.cat(topk_lps_list)
-            topk_token_idxs = torch.cat(topk_idxs_list)
+            # Flatten to 1D for indexing
+            topk_token_ids = torch.cat([t.reshape(-1) for t in topk_ids_list])
+            topk_logprobs = torch.cat([t.reshape(-1) for t in topk_lps_list])
+            topk_token_idxs = torch.cat([t.reshape(-1) for t in topk_idxs_list])
             
             cache.clear()
             outputs = wrapped_model(
@@ -693,8 +694,8 @@ def train_offpolicy(
             # Compute loss using pre-computed teacher logprobs
             topk_pred_logprobs = F.log_softmax(outputs.logits.float(), dim=-1)[
                 0,
-                topk_token_idxs.to(device) - 1,
-                topk_token_ids.to(device),
+                topk_token_idxs.long().to(device) - 1,
+                topk_token_ids.long().to(device),
             ]
             
             ce_by_token = -topk_logprobs.to(device).float().exp() * topk_pred_logprobs
