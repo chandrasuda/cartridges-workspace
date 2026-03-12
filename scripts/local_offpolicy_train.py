@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-Off-policy cartridge training — pre-generates responses once, then trains repeatedly.
+Off-policy cartridge training — MATCHING THE PAPER'S APPROACH.
 
-This is the off-policy baseline: responses are generated once at step 0 and 
-reused for all training steps. Contrast with on-policy (local_cartridge_train.py)
-which regenerates responses each step using the current cartridge.
+Key differences from on-policy:
+1. SYNTHESIS PHASE: Generate responses AND compute teacher logprobs ONCE at step 0
+2. TRAINING PHASE: Train on pre-computed data for exactly 1 epoch (NO REUSE)
+3. Teacher model is NOT needed during training (only during synthesis)
+
+This matches the paper: "No synthetically generated data is reused (i.e. training 
+proceeds for one epoch)." - Section 5, Figure 3 caption.
 """
 
 import argparse
@@ -149,15 +153,18 @@ def evaluate_cache(flex_model, tokenizer, cache, eval_questions, device, step, m
     return {"step": step, "accuracy": round(accuracy, 2), "correct": correct, "total": total}
 
 
-def generate_with_teacher(teacher_model, tokenizer, doc_ids, prompt_ids_list, max_tokens, temperature, device):
+def synthesize_with_teacher(teacher_model, tokenizer, doc_ids, prompt_ids_list, max_tokens, temperature, device, top_k=20):
     """
-    Generate responses using TEACHER model with FULL DOCUMENT context.
+    SYNTHESIS: Generate responses AND compute teacher logprobs IN ONE PASS.
     
-    This is the key difference from on-policy:
-    - On-policy: Student (cartridge) generates responses
-    - Off-policy: Teacher (full doc) generates responses
+    This matches the paper's approach:
+    - Generate response tokens using teacher with full document
+    - Compute top-k logprobs for each generated token
+    - Return both response AND logprobs (no recomputation needed later)
+    
+    Returns list of dicts with: prompt_ids, response_ids, topk_token_ids, topk_logprobs
     """
-    responses = []
+    results = []
     
     # Pre-compute document KV cache once
     doc_t = torch.tensor([doc_ids], dtype=torch.long, device=device)
@@ -168,7 +175,7 @@ def generate_with_teacher(teacher_model, tokenizer, doc_ids, prompt_ids_list, ma
     
     with torch.no_grad():
         for prompt_ids in prompt_ids_list:
-            # Expand doc KV for this sample
+            # Clone doc KV for this sample
             from transformers.cache_utils import DynamicCache
             sample_kv = DynamicCache()
             try:
@@ -186,8 +193,10 @@ def generate_with_teacher(teacher_model, tokenizer, doc_ids, prompt_ids_list, ma
             input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=device)
             position_ids = torch.arange(doc_len, doc_len + len(prompt_ids), dtype=torch.long, device=device).unsqueeze(0)
             
-            # Generate with teacher using full document as KV prefix
+            # Generate AND collect logprobs in one pass
             generated_ids = input_ids.clone()
+            all_topk_ids = []
+            all_topk_lps = []
             
             for _ in range(max_tokens):
                 with torch.autocast(device_type="cuda" if device.startswith("cuda") else device, 
@@ -202,6 +211,14 @@ def generate_with_teacher(teacher_model, tokenizer, doc_ids, prompt_ids_list, ma
                 sample_kv = outputs.past_key_values
                 
                 logits = outputs.logits[:, -1, :]
+                
+                # Compute top-k logprobs for this position
+                log_probs = F.log_softmax(logits.float(), dim=-1)
+                topk_lps, topk_ids = torch.topk(log_probs, k=top_k, dim=-1)
+                all_topk_ids.append(topk_ids[0].cpu())
+                all_topk_lps.append(topk_lps[0].cpu())
+                
+                # Sample next token
                 if temperature > 0:
                     probs = F.softmax(logits / temperature, dim=-1)
                     next_token = torch.multinomial(probs, num_samples=1)
@@ -217,14 +234,21 @@ def generate_with_teacher(teacher_model, tokenizer, doc_ids, prompt_ids_list, ma
             
             # Extract response (excluding prompt)
             response_ids = generated_ids[0, len(prompt_ids):].tolist()
-            responses.append(response_ids)
+            
+            if response_ids:  # Only add if we generated something
+                results.append({
+                    "prompt_ids": prompt_ids,
+                    "response_ids": response_ids,
+                    "topk_token_ids": torch.stack(all_topk_ids),  # [resp_len, top_k]
+                    "topk_logprobs": torch.stack(all_topk_lps),   # [resp_len, top_k]
+                })
             
             del sample_kv
     
     del doc_kv, doc_out, doc_t
     cleanup_memory(device)
     
-    return responses
+    return results
 
 
 def compute_teacher_topk(model, tokenizer, doc_ids, prompts, responses, device, top_k=20, micro_batch=4):
@@ -324,7 +348,7 @@ def compute_teacher_topk(model, tokenizer, doc_ids, prompts, responses, device, 
 
 
 def build_packed_batch(samples, packed_seq_length=2048):
-    """Pack samples into a single sequence."""
+    """Pack samples into a single sequence (for compute_teacher_topk output)."""
     all_input_ids, all_element_ids, all_position_ids = [], [], []
     all_topk_ids, all_topk_lps, all_topk_idxs = [], [], []
     curr_offset = 0
@@ -369,6 +393,65 @@ def build_packed_batch(samples, packed_seq_length=2048):
     }
 
 
+def build_packed_batch_precomputed(samples, packed_seq_length=2048):
+    """
+    Pack samples with PRE-COMPUTED logprobs into a single sequence.
+    
+    This is for the paper-matching approach where logprobs are computed
+    during synthesis, not during training.
+    """
+    all_input_ids, all_element_ids, all_position_ids = [], [], []
+    all_topk_ids, all_topk_lps, all_topk_idxs = [], [], []
+    curr_offset = 0
+    
+    for elem_id, s in enumerate(samples):
+        seq = s["prompt_ids"] + s["response_ids"]
+        seq_len = len(seq)
+        prompt_len = len(s["prompt_ids"])
+        response_len = len(s["response_ids"])
+        
+        if curr_offset + seq_len > packed_seq_length:
+            break
+        
+        all_input_ids.append(torch.tensor(seq, dtype=torch.long))
+        all_element_ids.append(torch.full((seq_len,), elem_id, dtype=torch.long))
+        all_position_ids.append(torch.arange(seq_len, dtype=torch.long))
+        
+        # Pre-computed logprobs are [response_len, top_k]
+        topk_ids = s["topk_token_ids"]  # Already a tensor
+        topk_lps = s["topk_logprobs"]   # Already a tensor
+        
+        # Build position indices for response tokens
+        resp_idxs = torch.arange(prompt_len, prompt_len + response_len, dtype=torch.long) + curr_offset
+        all_topk_idxs.append(resp_idxs.unsqueeze(1).expand(-1, topk_ids.shape[1]))
+        all_topk_ids.append(topk_ids)
+        all_topk_lps.append(topk_lps)
+        
+        curr_offset += seq_len
+    
+    if not all_input_ids:
+        raise ValueError("No samples fit in packed sequence")
+    
+    input_ids = torch.cat(all_input_ids)
+    element_ids = torch.cat(all_element_ids)
+    position_ids = torch.cat(all_position_ids)
+    
+    if len(input_ids) < packed_seq_length:
+        pad_len = packed_seq_length - len(input_ids)
+        input_ids = torch.cat([input_ids, torch.zeros(pad_len, dtype=torch.long)])
+        element_ids = torch.cat([element_ids, torch.zeros(pad_len, dtype=torch.long)])
+        position_ids = torch.cat([position_ids, torch.zeros(pad_len, dtype=torch.long)])
+    
+    return {
+        "input_ids": input_ids,
+        "element_ids": element_ids,
+        "position_ids": position_ids,
+        "topk_token_ids": torch.cat(all_topk_ids).reshape(-1),
+        "topk_logprobs": torch.cat(all_topk_lps).reshape(-1),
+        "topk_token_idxs": torch.cat(all_topk_idxs).reshape(-1),
+    }
+
+
 def train_offpolicy(
     model_path: str,
     train_parquet: str,
@@ -383,15 +466,24 @@ def train_offpolicy(
     save_dir: str = "./local_checkpoints",
     max_eval_samples: int = None,
     max_doc_tokens: int = 4096,
-    num_pregenerated: int = 100,  # Number of responses to pre-generate
 ):
-    """Off-policy training: pre-generate responses once, then train on them repeatedly."""
+    """
+    Off-policy training — MATCHING THE PAPER'S APPROACH.
+    
+    Key features:
+    1. Synthesize (total_steps * batch_size) samples with teacher logprobs
+    2. Train for exactly 1 epoch (NO data reuse)
+    3. Teacher model only needed during synthesis, not training
+    """
+    # Calculate exact number of samples needed (no reuse!)
+    num_samples_needed = total_steps * batch_size
     
     logger.info("=" * 70)
-    logger.info("OFF-POLICY TRAINING")
+    logger.info("OFF-POLICY TRAINING (PAPER-MATCHING)")
     logger.info("=" * 70)
-    logger.info(f"  Pre-generating {num_pregenerated} responses at step 0")
-    logger.info(f"  Then training {total_steps} steps on fixed data")
+    logger.info(f"  Total steps: {total_steps}")
+    logger.info(f"  Batch size: {batch_size}")
+    logger.info(f"  Samples needed: {num_samples_needed} (NO REUSE - 1 epoch)")
     logger.info("=" * 70)
     
     # Device selection
@@ -494,19 +586,18 @@ def train_offpolicy(
     token_history = []
     
     # ==========================================================================
-    # STEP 0: Pre-generate ALL responses using TEACHER with FULL DOCUMENT
-    # This is the key difference from on-policy:
-    # - Off-policy: Teacher (full doc) generates responses
-    # - On-policy: Student (cartridge) generates responses
+    # SYNTHESIS PHASE: Generate responses AND compute logprobs ONCE
+    # This matches the paper: logprobs are computed during synthesis, not training
     # ==========================================================================
     logger.info("=" * 70)
-    logger.info(f"PRE-GENERATING {num_pregenerated} RESPONSES WITH TEACHER (OFF-POLICY)")
-    logger.info("  Using TEACHER model with FULL DOCUMENT context for generation")
+    logger.info(f"SYNTHESIS: Generating {num_samples_needed} samples WITH teacher logprobs")
+    logger.info("  Teacher model computes logprobs ONCE during generation")
+    logger.info("  NO teacher model needed during training phase")
     logger.info("=" * 70)
     
     # Collect prompts grouped by patient for efficient generation
     prompts_by_patient = {}
-    for i in range(num_pregenerated):
+    for i in range(num_samples_needed):
         row = train_df.iloc[i % len(train_df)]
         messages = row["prompt"]
         if isinstance(messages, str):
@@ -516,49 +607,56 @@ def train_offpolicy(
         prompts_by_patient.setdefault(patient_id, []).append({
             "prompt_ids": prompt_ids,
             "patient_id": patient_id,
+            "index": i,
         })
     
-    pregenerated_data = []
-    gen_start = time.time()
-    gen_count = 0
+    # Synthesize: generate responses AND compute teacher logprobs in one pass
+    synthesized_data = []
+    synth_start = time.time()
+    synth_count = 0
     
     for patient_id, patient_prompts in prompts_by_patient.items():
-        # Get document for this patient
         doc_ids = patient_doc_ids.get(patient_id, [])
         if len(doc_ids) > max_doc_tokens:
             doc_ids = doc_ids[:max_doc_tokens]
         
-        # Generate all responses for this patient using teacher with full document
         prompt_ids_list = [p["prompt_ids"] for p in patient_prompts]
         
-        # Track generation tokens (doc + prompt + response for each)
+        # Track synthesis tokens
         for prompt_ids in prompt_ids_list:
-            total_tokens += len(doc_ids) + len(prompt_ids)  # Doc processed once per prompt
+            total_tokens += len(doc_ids) + len(prompt_ids)
         
-        response_ids_list = generate_with_teacher(
-            teacher_model, tokenizer, doc_ids, prompt_ids_list, 
-            max_response_length, temperature, device
+        # Generate AND compute logprobs in one pass (paper's approach)
+        results = synthesize_with_teacher(
+            teacher_model, tokenizer, doc_ids, prompt_ids_list,
+            max_response_length, temperature, device, top_k=20
         )
         
         # Track response tokens
-        for resp_ids in response_ids_list:
-            total_tokens += len(resp_ids)
+        for r in results:
+            total_tokens += len(r["response_ids"])
         
-        for prompt_data, resp_ids in zip(patient_prompts, response_ids_list):
-            if resp_ids:
-                pregenerated_data.append({
-                    "prompt_ids": prompt_data["prompt_ids"],
-                    "response_ids": resp_ids,
-                    "patient_id": patient_id,
-                })
+        for prompt_data, result in zip(patient_prompts, results):
+            synthesized_data.append({
+                "prompt_ids": result["prompt_ids"],
+                "response_ids": result["response_ids"],
+                "topk_token_ids": result["topk_token_ids"],  # Pre-computed!
+                "topk_logprobs": result["topk_logprobs"],    # Pre-computed!
+                "patient_id": patient_id,
+            })
         
-        gen_count += len(patient_prompts)
-        logger.info(f"  Pre-generated {gen_count}/{num_pregenerated} (patient {patient_id})")
+        synth_count += len(patient_prompts)
+        logger.info(f"  Synthesized {synth_count}/{num_samples_needed} (patient {patient_id})")
         cleanup_memory(device)
     
-    gen_elapsed = time.time() - gen_start
-    logger.info(f"Pre-generation complete: {len(pregenerated_data)} samples in {gen_elapsed:.1f}s")
-    logger.info(f"Generation tokens (teacher with doc): {total_tokens:,}")
+    synth_elapsed = time.time() - synth_start
+    logger.info(f"Synthesis complete: {len(synthesized_data)} samples in {synth_elapsed:.1f}s")
+    logger.info(f"Synthesis tokens: {total_tokens:,}")
+    
+    # Free teacher model - NOT NEEDED during training!
+    del teacher_model
+    cleanup_memory(device)
+    logger.info("Teacher model freed - not needed for training phase")
     
     # Step 0 evaluation
     eval_result = evaluate_cache(
@@ -579,48 +677,46 @@ def train_offpolicy(
     cache.save(ckpt_path)
     
     # ==========================================================================
-    # TRAINING LOOP (reusing pre-generated data)
+    # TRAINING LOOP - 1 EPOCH, NO REUSE (matches paper)
+    # Uses PRE-COMPUTED logprobs - NO teacher model needed!
     # ==========================================================================
     logger.info("=" * 70)
-    logger.info("TRAINING ON PRE-GENERATED DATA (OFF-POLICY)")
+    logger.info("TRAINING: 1 epoch on synthesized data (NO REUSE)")
+    logger.info("  Using PRE-COMPUTED teacher logprobs")
+    logger.info("  NO teacher model computation during training")
     logger.info("=" * 70)
+    
+    # Shuffle synthesized data once at start (paper does this)
+    np.random.seed(42)
+    np.random.shuffle(synthesized_data)
     
     for step in range(1, total_steps + 1):
         cleanup_memory(device)
         step_t0 = time.time()
         logger.info(f"--- STEP {step}/{total_steps} ---")
         
-        # Sample from pre-generated data (cyclic)
-        batch_indices = [(step * batch_size + i) % len(pregenerated_data) for i in range(batch_size)]
-        batch_data = [pregenerated_data[idx] for idx in batch_indices]
+        # Get batch - each sample used EXACTLY ONCE (no cycling!)
+        batch_start = (step - 1) * batch_size
+        batch_end = min(batch_start + batch_size, len(synthesized_data))
+        batch_data = synthesized_data[batch_start:batch_end]
         
-        # Group by patient for teacher computation
-        by_patient = {}
-        for item in batch_data:
-            pid = item["patient_id"]
-            by_patient.setdefault(pid, []).append((item["prompt_ids"], item["response_ids"]))
+        if not batch_data:
+            logger.warning(f"No more data at step {step}, stopping early")
+            break
         
-        # Compute teacher top-k (NO generation needed - using pre-generated responses)
-        teacher_t0 = time.time()
+        # Convert pre-computed data to training format
         all_samples = []
-        for pid, items in by_patient.items():
-            doc_ids = patient_doc_ids.get(pid, [])
-            if len(doc_ids) > max_doc_tokens:
-                doc_ids = doc_ids[:max_doc_tokens]
-            p_list = [x[0] for x in items]
-            r_list = [x[1] for x in items]
-            
-            # Track teacher tokens
-            for p, r in zip(p_list, r_list):
-                total_tokens += len(doc_ids) + len(p) + len(r)
-            
-            samples = compute_teacher_topk(teacher_model, tokenizer, doc_ids, p_list, r_list, device)
-            all_samples.extend(samples)
-        teacher_elapsed = time.time() - teacher_t0
+        for item in batch_data:
+            # Use PRE-COMPUTED logprobs (no teacher needed!)
+            all_samples.append({
+                "prompt_ids": item["prompt_ids"],
+                "response_ids": item["response_ids"],
+                "topk_token_ids": item["topk_token_ids"],
+                "topk_logprobs": item["topk_logprobs"],
+            })
         
-        # Train
+        # Train on batch
         train_t0 = time.time()
-        np.random.shuffle(all_samples)
         
         accum_loss = 0.0
         n_batches = 0
@@ -628,7 +724,7 @@ def train_offpolicy(
         
         i = 0
         while i < len(all_samples):
-            batch = build_packed_batch(all_samples[i:])
+            batch = build_packed_batch_precomputed(all_samples[i:])
             packed_count = batch["element_ids"].max().item() + 1
             i += max(packed_count, 1)
             
@@ -661,7 +757,7 @@ def train_offpolicy(
         step_elapsed = time.time() - step_t0
         
         avg_loss = accum_loss / max(n_batches, 1)
-        logger.info(f"Step {step}: loss={avg_loss:.4f} | teacher={teacher_elapsed:.1f}s | train={train_elapsed:.1f}s | total={step_elapsed:.1f}s | tokens={total_tokens:,}")
+        logger.info(f"Step {step}: loss={avg_loss:.4f} | train={train_elapsed:.1f}s | total={step_elapsed:.1f}s | tokens={total_tokens:,}")
         
         # Evaluate (every eval_every steps or final step)
         if step % eval_every == 0 or step == total_steps:
@@ -693,11 +789,12 @@ def train_offpolicy(
             "eval_results": eval_results,
             "token_history": token_history,
             "config": {
-                "mode": "off-policy",
-                "num_pregenerated": num_pregenerated,
+                "mode": "off-policy (paper-matching)",
+                "num_synthesized": num_samples_needed,
                 "total_steps": total_steps,
                 "batch_size": batch_size,
                 "lr": lr,
+                "data_reuse": "NONE (1 epoch)",
             }
         }, f, indent=2)
     
@@ -711,7 +808,7 @@ def train_offpolicy(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Off-policy cartridge training")
+    parser = argparse.ArgumentParser(description="Off-policy cartridge training (paper-matching)")
     parser.add_argument("--model", required=True, help="Path to model")
     parser.add_argument("--train-parquet", required=True, help="Training data parquet")
     parser.add_argument("--num-tokens", type=int, default=512, help="Cache size")
@@ -723,13 +820,15 @@ def main():
     parser.add_argument("--save-dir", type=str, default="./local_checkpoints/off_policy_run")
     parser.add_argument("--max-eval-samples", type=int, default=None, help="Limit eval samples (default: all)")
     parser.add_argument("--max-doc-tokens", type=int, default=4096)
-    parser.add_argument("--num-pregenerated", type=int, default=200, help="Number of responses to pre-generate")
+    # NOTE: No --num-pregenerated! Paper-matching version auto-calculates:
+    #       num_samples = total_steps * batch_size (NO REUSE)
     
     args = parser.parse_args()
     
     logger.info("Arguments:")
     for k, v in vars(args).items():
         logger.info(f"  --{k}: {v}")
+    logger.info(f"  [AUTO] Samples to synthesize: {args.total_steps * args.batch_size} (total_steps × batch_size)")
     
     train_offpolicy(
         model_path=args.model,
@@ -743,7 +842,6 @@ def main():
         save_dir=args.save_dir,
         max_eval_samples=args.max_eval_samples,
         max_doc_tokens=args.max_doc_tokens,
-        num_pregenerated=args.num_pregenerated,
     )
 
 

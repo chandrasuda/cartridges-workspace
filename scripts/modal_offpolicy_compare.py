@@ -1,8 +1,13 @@
 """
-Off-policy cartridge training on Modal for comparison experiment.
+Off-policy cartridge training on Modal — PAPER-MATCHING VERSION.
 
-Uses local_offpolicy_train.py which has proper token tracking for fair comparison.
-Key difference from on-policy: teacher generates responses (not student).
+Key differences from on-policy:
+1. SYNTHESIS PHASE: Generate (total_steps × batch_size) samples with teacher logprobs
+2. TRAINING PHASE: Train for exactly 1 epoch (NO DATA REUSE)
+3. Teacher model only needed during synthesis, not training
+
+This matches the paper: "No synthetically generated data is reused (i.e. training
+proceeds for one epoch)." - Section 5, Figure 3 caption.
 
 Usage:
     modal run --detach scripts/modal_offpolicy_compare.py
@@ -59,8 +64,8 @@ app = modal.App("offpolicy-compare", image=image)
     scaledown_window=600,
     volumes={"/results": results_volume},
 )
-def train(total_steps: int = 500, batch_size: int = 4, lr: float = 0.02, eval_every: int = 50, save_every: int = 50, num_pregenerated: int = 200):
-    """Run off-policy training overnight with full eval every N steps."""
+def train(total_steps: int = 500, batch_size: int = 4, lr: float = 0.02, eval_every: int = 50, save_every: int = 50):
+    """Run off-policy training (paper-matching: 1 epoch, no data reuse)."""
     import subprocess, os, sys
 
     env = os.environ.copy()
@@ -69,6 +74,8 @@ def train(total_steps: int = 500, batch_size: int = 4, lr: float = 0.02, eval_ev
     train_parquet = "/opt/workspace/data/on_policy/train.parquet"
     assert os.path.exists(train_parquet), f"Missing {train_parquet}"
 
+    # Paper-matching: auto-calculates num_samples = total_steps × batch_size
+    # NO --num-pregenerated argument needed!
     cmd = [
         sys.executable, "/opt/workspace/scripts/local_offpolicy_train.py",
         "--model", "meta-llama/Llama-3.2-3B-Instruct",
@@ -79,11 +86,12 @@ def train(total_steps: int = 500, batch_size: int = 4, lr: float = 0.02, eval_ev
         "--batch-size", str(batch_size),
         "--eval-every", str(eval_every),
         "--save-every", str(save_every),
-        "--num-pregenerated", str(num_pregenerated),
         "--save-dir", "/results/offpolicy",
     ]  # No --max-eval-samples means full eval
 
-    print(f"Running off-policy training: {' '.join(cmd)}")
+    print(f"Running off-policy training (paper-matching): {' '.join(cmd)}")
+    print(f"  Will synthesize {total_steps * batch_size} samples with teacher logprobs")
+    print(f"  Train for exactly 1 epoch (NO DATA REUSE)")
     result = subprocess.run(cmd, env=env, stdout=sys.stdout, stderr=sys.stderr)
     
     results_volume.commit()
@@ -97,14 +105,20 @@ def main(
     lr: float = 0.02,
     eval_every: int = 50,
     save_every: int = 50,
-    num_pregenerated: int = 200,
 ):
+    print("=" * 70)
+    print("OFF-POLICY TRAINING (PAPER-MATCHING)")
+    print("=" * 70)
+    print(f"  total_steps: {total_steps}")
+    print(f"  batch_size: {batch_size}")
+    print(f"  samples to synthesize: {total_steps * batch_size} (NO REUSE)")
+    print("=" * 70)
+    
     exit_code = train.remote(
         total_steps=total_steps,
         batch_size=batch_size,
         lr=lr,
         eval_every=eval_every,
         save_every=save_every,
-        num_pregenerated=num_pregenerated,
     )
     print(f"Training finished with exit code: {exit_code}")
