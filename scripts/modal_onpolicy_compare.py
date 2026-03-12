@@ -9,7 +9,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v51-onpolicy-evalfix"
+WORKSPACE_VERSION = "v52-nosubmodules"
 GPU = "A100-80GB"
 
 image = (
@@ -29,12 +29,14 @@ image = (
     )
     .run_commands(
         f"echo '{WORKSPACE_VERSION}' && "
-        "git clone --recurse-submodules --depth 1 "
-        "https://github.com/chandrasuda/cartridges-workspace.git /opt/workspace"
+        "git clone --depth 1 https://github.com/chandrasuda/cartridges-workspace.git /opt/workspace"
+    )
+    .run_commands(
+        "git clone --depth 1 https://github.com/HazyResearch/cartridges.git /opt/workspace/cartridges "
+        "&& git clone --depth 1 -b geoff/cartridges https://github.com/ScalingIntelligence/tokasaurus.git /opt/workspace/tokasaurus"
     )
     .run_commands(
         "pip install -e /opt/workspace/cartridges "
-        "&& pip install -e /opt/workspace/verl "
         "&& pip install -e /opt/workspace/tokasaurus"
     )
     .pip_install(
