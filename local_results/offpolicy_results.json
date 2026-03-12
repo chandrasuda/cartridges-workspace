@@ -1,0 +1,79 @@
+{
+  "eval_results": [
+    {
+      "step": 0,
+      "accuracy": 2.0,
+      "correct": 1,
+      "total": 50
+    },
+    {
+      "step": 1,
+      "accuracy": 6.0,
+      "correct": 3,
+      "total": 50
+    },
+    {
+      "step": 2,
+      "accuracy": 6.0,
+      "correct": 3,
+      "total": 50
+    },
+    {
+      "step": 3,
+      "accuracy": 6.0,
+      "correct": 3,
+      "total": 50
+    },
+    {
+      "step": 4,
+      "accuracy": 6.0,
+      "correct": 3,
+      "total": 50
+    },
+    {
+      "step": 5,
+      "accuracy": 4.0,
+      "correct": 2,
+      "total": 50
+    }
+  ],
+  "token_history": [
+    {
+      "step": 0,
+      "tokens": 86556,
+      "accuracy": 2.0
+    },
+    {
+      "step": 1,
+      "tokens": 106076,
+      "accuracy": 6.0
+    },
+    {
+      "step": 2,
+      "tokens": 125497,
+      "accuracy": 6.0
+    },
+    {
+      "step": 3,
+      "tokens": 144793,
+      "accuracy": 6.0
+    },
+    {
+      "step": 4,
+      "tokens": 163944,
+      "accuracy": 6.0
+    },
+    {
+      "step": 5,
+      "tokens": 183352,
+      "accuracy": 4.0
+    }
+  ],
+  "config": {
+    "mode": "off-policy",
+    "num_pregenerated": 20,
+    "total_steps": 5,
+    "batch_size": 4,
+    "lr": 0.02
+  }
+}

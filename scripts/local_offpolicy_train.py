@@ -80,8 +80,30 @@ def extract_answer(text: str) -> str:
     return m.group(1) if m else "?"
 
 
+def load_eval_questions(lh_data: dict, eval_patient_ids: set) -> list:
+    """Load evaluation questions for specified patient IDs (MATCHES on-policy exactly)."""
+    questions = []
+    for pid, patient in lh_data.items():
+        if pid not in eval_patient_ids:
+            continue
+        for q in patient["questions"]:
+            options = "\n".join(L + ") " + q["answer_" + L.lower()] for L in "ABCDE")
+            prompt = (
+                f"You are answering a multiple choice question about patient {patient['name']}.\n\n"
+                f"Question: {q['question']}\n\nOptions:\n{options}\n\n"
+                f"Answer with ONLY the letter (A, B, C, D, or E):"
+            )
+            answer_map = {q["answer_" + L.lower()]: L for L in "ABCDE"}
+            questions.append({
+                "prompt": prompt,
+                "correct": answer_map.get(q["correct"], "?"),
+                "patient_id": pid,
+            })
+    return questions
+
+
 def evaluate_cache(flex_model, tokenizer, cache, eval_questions, device, step, max_eval_samples=None):
-    """Evaluate cache on LongHealth questions (matches on-policy evaluation exactly)."""
+    """Evaluate cache on LongHealth questions (MATCHES on-policy evaluation exactly)."""
     logger.info(f"  [EVAL] Evaluating at step {step}...")
     eval_start = time.time()
     
@@ -91,17 +113,8 @@ def evaluate_cache(flex_model, tokenizer, cache, eval_questions, device, step, m
     
     with torch.no_grad():
         for i, q in enumerate(samples):
-            question = q["question"]
-            options = q["options"]
-            correct_answer = q["answer"]
-            
-            prompt = f"Question: {question}\n\nOptions:\n"
-            for opt_letter, opt_text in sorted(options.items()):
-                prompt += f"{opt_letter}. {opt_text}\n"
-            prompt += "\nAnswer with just the letter (A, B, C, D, or E):"
-            
-            messages = [{"role": "user", "content": prompt}]
-            ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
+            # Use SAME format as on-policy: raw encode, not chat template
+            ids = tokenizer.encode(q["prompt"])
             input_ids = torch.tensor(ids, dtype=torch.long, device=device)
             seq_ids = torch.zeros_like(input_ids)
             position_ids = torch.arange(len(ids), dtype=torch.long, device=device)
@@ -126,7 +139,7 @@ def evaluate_cache(flex_model, tokenizer, cache, eval_questions, device, step, m
                 logger.debug(f"    Eval generation failed for Q{i}: {e}")
                 predicted = "?"
             
-            if predicted == correct_answer:
+            if predicted == q["correct"]:
                 correct += 1
     
     accuracy = 100 * correct / total
@@ -415,48 +428,42 @@ def train_offpolicy(
     train_df = train_df.sample(frac=1, random_state=42).reset_index(drop=True)
     logger.info(f"Loaded {len(train_df)} training prompts (SHUFFLED)")
     
-    # Load LongHealth data using cartridges utilities
-    from cartridges.data.longhealth.utils import load_longhealth_dataset
+    # Load LongHealth data directly from GitHub (MATCHES on-policy exactly)
+    logger.info("Downloading LongHealth benchmark data...")
+    lh_data = requests.get(
+        "https://raw.githubusercontent.com/kbressem/LongHealth/refs/heads/main/data/benchmark_v5.json"
+    ).json()
     
-    training_patients_list = sorted(train_df["patient_id"].unique())
-    patients = load_longhealth_dataset(patient_ids=training_patients_list)
+    # Build patient documents (MATCHES on-policy exactly)
+    patient_doc_ids = {}
+    patient_doc_texts = {}
+    total_doc_tokens = 0
+    for pid, patient in lh_data.items():
+        doc_text = "\n\n".join(f"--- {did} ---\n{txt}" for did, txt in patient["texts"].items())
+        patient_doc_texts[pid] = doc_text
+        patient_doc_ids[pid] = tokenizer.encode(doc_text, add_special_tokens=False)
+        total_doc_tokens += len(patient_doc_ids[pid])
+    logger.info(f"Loaded {len(patient_doc_ids)} patient documents, {total_doc_tokens:,} total tokens")
     
-    # Build eval questions in our format
-    eval_questions = []
-    patient_docs = {}
-    for patient in patients:
-        # Combine all patient texts into one document
-        full_doc = "\n\n".join(patient.texts.values())
-        patient_docs[patient.patient_id] = full_doc
-        
-        for q in patient.questions:
-            eval_questions.append({
-                "question": q.question,
-                "options": {
-                    "A": q.answer_a,
-                    "B": q.answer_b,
-                    "C": q.answer_c,
-                    "D": q.answer_d,
-                    "E": q.answer_e,
-                },
-                "answer": q.correct[0] if q.correct else "A",  # Extract letter from full answer
-                "patient_id": patient.patient_id,
-            })
+    # Load evaluation questions (MATCHES on-policy exactly)
+    EVAL_PATIENT_IDS = {f"patient_{i:02d}" for i in range(1, 11)}
+    eval_questions = load_eval_questions(lh_data, EVAL_PATIENT_IDS)
+    # Shuffle for balanced coverage when using max_eval_samples
+    np.random.seed(42)
+    np.random.shuffle(eval_questions)
+    logger.info(f"Loaded {len(eval_questions)} eval questions (SHUFFLED for balanced coverage)")
     
-    # Shuffle eval questions for balanced coverage
-    import random
-    random.shuffle(eval_questions)
-    
-    patient_doc_ids = {pid: tokenizer.encode(doc, add_special_tokens=False) for pid, doc in patient_docs.items()}
-    logger.info(f"Loaded {len(patients)} patients with {len(eval_questions)} eval questions")
-    
-    # Initialize cache from patient documents
+    # Initialize cache from patient documents (MATCHES on-policy exactly)
     training_patients = sorted(train_df["patient_id"].unique())
+    tokens_per_patient = num_tokens // len(training_patients)
     init_text_parts = []
-    for patient_id in training_patients[:5]:
-        doc = patient_docs.get(patient_id, "")
-        if doc:
-            init_text_parts.append(f"--- {patient_id} ---\n{doc[:200]}")
+    for pid in training_patients:
+        if pid in patient_doc_texts:
+            # Get the first portion of this patient's document
+            doc_text = patient_doc_texts[pid]
+            # Truncate to approximately tokens_per_patient worth of text
+            char_limit = tokens_per_patient * 4
+            init_text_parts.append(doc_text[:char_limit])
     init_text = "\n\n".join(init_text_parts)
     
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:

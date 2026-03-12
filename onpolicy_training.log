@@ -1,0 +1,137 @@
+2026-03-12 02:18:17 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:18:17 | INFO     | local_cartridge_train | LOCAL CARTRIDGE TRAINING SCRIPT
+2026-03-12 02:18:17 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:18:17 | INFO     | local_cartridge_train | SCRIPT_DIR: /Users/csuda/cartridges-workspace/scripts
+2026-03-12 02:18:17 | INFO     | local_cartridge_train | WORKSPACE_DIR: /Users/csuda/cartridges-workspace
+2026-03-12 02:18:17 | INFO     | local_cartridge_train | CARTRIDGES_DIR: /Users/csuda/cartridges-workspace/cartridges
+2026-03-12 02:18:17 | INFO     | local_cartridge_train | CARTRIDGES_OUTPUT_DIR: /Users/csuda/cartridges-workspace/local_checkpoints
+2026-03-12 02:18:17 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:18:20 | INFO     | local_cartridge_train | Importing cartridges modules...
+2026-03-12 02:18:20 | INFO     | local_cartridge_train |   - Imported cache module (AttnConfig, TrainableCache)
+2026-03-12 02:18:20 | INFO     | local_cartridge_train |   - Imported initialization module (KVFromText)
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - Imported FlexLlamaForCausalLM
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - Imported train module (CacheAndModel)
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - Imported generation module (flex_generate)
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | All cartridges modules imported successfully!
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | Command line arguments:
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   --model: /Users/csuda/cartridges-workspace/model/Llama-3.2-3B-Instruct
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   --train-parquet: data/on_policy/train.parquet
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   --num-tokens: 512
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   --lr: 0.02
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   --total-steps: 5
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   --batch-size: 4
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   --eval-every: 25
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   --save-dir: ./local_checkpoints/onpolicy_final
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   --debug: False
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   --max-eval-samples: 50
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   --max-doc-tokens: 4096
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | STARTING TRAINING
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | Training Configuration:
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - model_path: /Users/csuda/cartridges-workspace/model/Llama-3.2-3B-Instruct
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - train_parquet: data/on_policy/train.parquet
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - num_tokens (cache size): 512
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - learning_rate: 0.02
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - total_steps: 5
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - batch_size: 4
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - max_response_length: 256
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - temperature: 0.7
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - eval_every: 25
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - save_dir: ./local_checkpoints/onpolicy_final
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - max_eval_samples: 50
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - max_doc_tokens: 4096
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | Detecting compute device...
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - Apple MPS available
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | Selected device: mps, dtype: torch.float32
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | --------------------------------------------------
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | Loading tokenizer from: /Users/csuda/cartridges-workspace/model/Llama-3.2-3B-Instruct
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - Tokenizer loaded, vocab_size: 128000
+2026-03-12 02:18:21 | INFO     | local_cartridge_train |   - Tokenizer name_or_path: /Users/csuda/cartridges-workspace/model/Llama-3.2-3B-Instruct -> meta-llama/Llama-3.2-3B-Instruct
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | --------------------------------------------------
+2026-03-12 02:18:21 | INFO     | local_cartridge_train | Loading teacher model (standard HuggingFace)...
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:11<00:11, 11.76s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:16<00:00,  7.38s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:16<00:00,  8.03s/it]
+2026-03-12 02:18:40 | INFO     | local_cartridge_train |   - Teacher model loaded successfully
+2026-03-12 02:18:40 | INFO     | local_cartridge_train |   - Model config: 28 layers, 3072 hidden_size
+2026-03-12 02:18:40 | INFO     | local_cartridge_train | Loading flex model (FlexLlamaForCausalLM)...
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:02<00:02,  2.95s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:03<00:00,  1.58s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:03<00:00,  1.79s/it]
+2026-03-12 02:18:47 | INFO     | local_cartridge_train |   - FlexLlama model loaded, all parameters frozen
+2026-03-12 02:18:47 | INFO     | local_cartridge_train |   - AttnConfig: AttnConfig(n_layers=28, n_heads=8, head_dim=128)
+2026-03-12 02:18:47 | INFO     | local_cartridge_train | --------------------------------------------------
+2026-03-12 02:18:47 | INFO     | local_cartridge_train | Loading training data from: data/on_policy/train.parquet
+2026-03-12 02:18:47 | INFO     | local_cartridge_train |   - Loaded 110112 training prompts (SHUFFLED)
+2026-03-12 02:18:47 | INFO     | local_cartridge_train |   - Columns: ['prompt', 'patient_id', 'data_source', 'reward_model']
+2026-03-12 02:18:47 | INFO     | local_cartridge_train |   - Patient distribution in first 100: {'patient_04': 17, 'patient_01': 14, 'patient_05': 14, 'patient_09': 12, 'patient_10': 9, 'patient_07': 8, 'patient_08': 7, 'patient_02': 7, 'patient_03': 6, 'patient_06': 6}
+2026-03-12 02:18:47 | INFO     | local_cartridge_train | --------------------------------------------------
+2026-03-12 02:18:47 | INFO     | local_cartridge_train | Downloading LongHealth benchmark data...
+2026-03-12 02:18:48 | INFO     | local_cartridge_train |   - Loaded 20 patient documents
+2026-03-12 02:18:48 | INFO     | local_cartridge_train |   - Total document tokens: 222,309
+2026-03-12 02:18:48 | INFO     | local_cartridge_train |   - Average tokens per document: 11,115
+2026-03-12 02:18:48 | INFO     | local_cartridge_train | --------------------------------------------------
+2026-03-12 02:18:48 | INFO     | local_cartridge_train | Initializing trainable cache with 512 tokens...
+2026-03-12 02:18:48 | INFO     | local_cartridge_train |   - Using PATIENT DOCUMENT initialization (per Cartridges paper)
+2026-03-12 02:18:48 | INFO     | local_cartridge_train |   - Training patients: ['patient_01', 'patient_02', 'patient_03', 'patient_04', 'patient_05', 'patient_06', 'patient_07', 'patient_08', 'patient_09', 'patient_10']
+2026-03-12 02:18:48 | INFO     | local_cartridge_train |   - Initialization text: 2,058 chars from 10 patients
+2026-03-12 02:18:48 | INFO     | local_cartridge_train |   - Wrote initialization text to: /var/folders/lz/1jczgn2n6lb1h9_73drs_bkm0000gp/T/tmp0515_1ei.txt
+/Users/csuda/cartridges-workspace/cartridges/cartridges/initialization/text.py:41: UserWarning: CUDA is not available or torch_xla is imported. Disabling autocast.
+  with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+2026-03-12 02:18:48,775 - cartridges.cache [rank=0] - INFO - num_trainable_tokens: 511
+2026-03-12 02:18:48 | INFO     | cartridges.cache [rank=0] | num_trainable_tokens: 511
+2026-03-12 02:18:48,775 - cartridges.cache [rank=0] - INFO - num_frozen_tokens: 1
+2026-03-12 02:18:48 | INFO     | cartridges.cache [rank=0] | num_frozen_tokens: 1
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   - Cache initialized: 512 cartridge tokens
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   - Trainable params in cache: 29,302,784
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   - ✓ Cache initialized from PATIENT DOCUMENTS (not random text)
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   - Optimizer: Adam(lr=0.02)
+2026-03-12 02:18:53 | INFO     | local_cartridge_train | --------------------------------------------------
+2026-03-12 02:18:53 | INFO     | local_cartridge_train | Loading evaluation questions...
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   - Loaded 200 evaluation questions (SHUFFLED for balanced coverage)
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   - Evaluation patients: ['patient_01', 'patient_02', 'patient_03', 'patient_04', 'patient_05', 'patient_06', 'patient_07', 'patient_08', 'patient_09', 'patient_10']
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   - Save directory: ./local_checkpoints/onpolicy_final
+2026-03-12 02:18:53 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:18:53 | INFO     | local_cartridge_train | TRAINING INITIALIZATION COMPLETE
+2026-03-12 02:18:53 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   Model: /Users/csuda/cartridges-workspace/model/Llama-3.2-3B-Instruct
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   Cache: 512 tokens, LR=0.02
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   Batch: 4 samples
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   Steps: 5
+2026-03-12 02:18:53 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:18:53 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:18:53 | INFO     | local_cartridge_train | STEP 0 EVALUATION (before training)
+2026-03-12 02:18:53 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:18:53 | INFO     | local_cartridge_train |   [EVAL] Evaluating at step 0...
+2026-03-12 02:18:53 | DEBUG    | local_cartridge_train |     Q0: pred=C correct=C
+2026-03-12 02:18:54 | DEBUG    | local_cartridge_train |     Q1: pred=A correct=C
+2026-03-12 02:18:54 | DEBUG    | local_cartridge_train |     Q2: pred=B correct=B
+2026-03-12 02:18:57 | DEBUG    | local_cartridge_train |     [20/50] running acc=15.0%
+2026-03-12 02:19:01 | DEBUG    | local_cartridge_train |     [40/50] running acc=20.0%
+2026-03-12 02:19:03 | INFO     | local_cartridge_train |   [EVAL] Step 0: 9/50 = 18.0% (9.4s)
+2026-03-12 02:19:03 | INFO     | local_cartridge_train |   Step 0 baseline accuracy: 18.0%
+2026-03-12 02:19:03 | INFO     | local_cartridge_train |   - Checkpoint saved: ./local_checkpoints/onpolicy_final/step-0/cartridge.pt
+2026-03-12 02:19:03 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:19:03 | INFO     | local_cartridge_train | Starting training loop...
+2026-03-12 02:19:03 | INFO     | local_cartridge_train | ======================================================================
+2026-03-12 02:19:03 | INFO     | local_cartridge_train | --- STEP 1/5 ---
+2026-03-12 02:19:03 | DEBUG    | local_cartridge_train | Step 1: Sampling 4 prompts...
+2026-03-12 02:19:03 | DEBUG    | local_cartridge_train |   - Sampled 4 prompts, avg length: 81 tokens
+2026-03-12 02:19:03 | DEBUG    | local_cartridge_train | Step 1: Generating responses locally...
+2026-03-12 02:19:03 | DEBUG    | local_cartridge_train | generate_batch_local: Starting generation for 4 prompts
+2026-03-12 02:19:03 | DEBUG    | local_cartridge_train |   - max_tokens: 256, temperature: 0.7, device: mps
+2026-03-12 02:19:03 | DEBUG    | local_cartridge_train |   - Generating response 1/4, prompt length: 99
+2026-03-12 02:19:23 | DEBUG    | local_cartridge_train |     - Generated 256 tokens
+2026-03-12 02:19:23 | DEBUG    | local_cartridge_train |   - Generating response 2/4, prompt length: 77
+2026-03-12 02:19:37 | DEBUG    | local_cartridge_train |     - Generated 256 tokens
+2026-03-12 02:19:37 | DEBUG    | local_cartridge_train |   - Generating response 3/4, prompt length: 76
+2026-03-12 02:19:40 | DEBUG    | local_cartridge_train |     - Generated 38 tokens
+2026-03-12 02:19:40 | DEBUG    | local_cartridge_train |   - Generating response 4/4, prompt length: 71
+2026-03-12 02:19:54 | DEBUG    | local_cartridge_train |     - Generated 256 tokens
+2026-03-12 02:19:54 | DEBUG    | local_cartridge_train | generate_batch_local: Completed. 4 successful responses
+2026-03-12 02:19:54 | DEBUG    | local_cartridge_train |   - Generation complete in 50.88s
+2026-03-12 02:19:54 | DEBUG    | local_cartridge_train |   - 4/4 valid responses, gen_tokens=1,129
+2026-03-12 02:19:54 | DEBUG    | local_cartridge_train | Step 1: Computing teacher top-k logprobs...
+2026-03-12 02:19:54 | DEBUG    | local_cartridge_train |   - Grouped by 3 patients
+2026-03-12 02:19:54 | DEBUG    | local_cartridge_train |   - Truncated patient_10 doc from 10607 to 4096 tokens
+2026-03-12 02:19:54 | DEBUG    | local_cartridge_train | compute_teacher_topk: Processing 1 prompts
+2026-03-12 02:19:54 | DEBUG    | local_cartridge_train |   - doc_len: 4096, top_k: 20, micro_batch: 4
+2026-03-12 02:19:54 | DEBUG    | local_cartridge_train |   - Computing document KV cache...
+2026-03-12 02:20:25 | DEBUG    | local_cartridge_train |   - Document KV cache computed, doc_len: 4096
