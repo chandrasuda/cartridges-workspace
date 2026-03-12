@@ -9,7 +9,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v50-onpolicy-compare"
+WORKSPACE_VERSION = "v51-onpolicy-evalfix"
 GPU = "A100-80GB"
 
 image = (
