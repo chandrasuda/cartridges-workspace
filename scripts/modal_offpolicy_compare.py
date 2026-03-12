@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v58-1k-steps"
+WORKSPACE_VERSION = "v59-fix-batch-dim"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 

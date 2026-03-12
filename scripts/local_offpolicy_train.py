@@ -708,7 +708,9 @@ def train_offpolicy(
             )
             
             # Compute loss using pre-computed teacher logprobs
+            # outputs.logits is [1, seq_len, vocab_size] - need batch index 0
             topk_pred_logprobs = F.log_softmax(outputs.logits.float(), dim=-1)[
+                0,
                 topk_token_idxs.long().to(device) - 1,
                 topk_token_ids.long().to(device),
             ]
