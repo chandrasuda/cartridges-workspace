@@ -61,6 +61,113 @@ python scripts/plot_comparison.py --off results/off_policy.json --on results/on_
 | Training time | 53 min (40 steps, A100-80GB) |
 | Trainable params | 2048 tokens × 28 layers × 2 (keys + values) × 8 KV heads × 128 head_dim × bfloat16 (117 million parameters) / 3.33B (3.5%) |
 
+---
+
+## Local Training (March 2026)
+
+### On-Policy vs Off-Policy Comparison
+
+Scripts for running on-policy and off-policy training locally (MPS/CUDA) with full token tracking:
+
+```bash
+# On-policy: regenerates responses each step using current cartridge
+python scripts/local_cartridge_train.py \
+    --model /path/to/Llama-3.2-3B-Instruct \
+    --train-parquet data/on_policy/train.parquet \
+    --total-steps 5 --batch-size 4 --lr 0.02 \
+    --max-eval-samples 50 --save-dir ./local_checkpoints/onpolicy
+
+# Off-policy: pre-generates responses with teacher, trains on fixed data
+python scripts/local_offpolicy_train.py \
+    --model /path/to/Llama-3.2-3B-Instruct \
+    --train-parquet data/on_policy/train.parquet \
+    --total-steps 5 --batch-size 4 --lr 0.02 \
+    --max-eval-samples 50 --num-pregenerated 20 \
+    --save-dir ./local_checkpoints/offpolicy
+
+# Generate comparison plot
+python scripts/plot_comparison.py \
+    --onpolicy local_checkpoints/onpolicy/onpolicy_results.json \
+    --offpolicy local_checkpoints/offpolicy/offpolicy_results.json \
+    --output comparison.png
+```
+
+### Key Differences
+
+| Aspect | On-Policy | Off-Policy |
+|--------|-----------|------------|
+| Response generation | Student (cartridge) each step | Teacher (full doc) once at step 0 |
+| Distribution | Fresh, matches current policy | Fixed, may drift from policy |
+| Token cost per step | High (gen + teacher + train) | Low (teacher + train only) |
+| Learning signal | Always on-distribution | May be off-distribution |
+
+### Session 3 — Local Training & Fair Comparison (March 2026)
+
+This session focused on setting up a scientifically valid comparison between on-policy and off-policy cartridge training on local hardware (MPS/CUDA).
+
+#### 21. Learning Rate Critical — Paper Uses LR=0.02
+
+**Problem:** Accuracy was stuck at ~20% despite correct on-policy implementation. We were using `lr=0.0005` (40x lower than paper).
+
+**Fix:** Changed to `lr=0.02` per the Cartridges paper (arXiv:2506.06266). This is high for Adam but appropriate for the small parameter space (512 cache tokens ≈ 4M params).
+
+**Result:** Accuracy improved from 18% → 36% over 5 steps.
+
+#### 22. Off-Policy Must Generate with Teacher
+
+**Problem:** Initial off-policy script generated responses using the student (cartridge), not the teacher. This defeats the purpose of off-policy — the teacher with full document context should generate higher-quality responses.
+
+**Fix:** Created `generate_with_teacher()` function that:
+1. Pre-computes document KV cache once per patient
+2. Generates responses autoregressively with full document context  
+3. Clones KV cache for each sample to avoid interference
+4. Returns high-quality responses for the student to learn from
+
+This matches the paper: off-policy uses teacher-generated responses while on-policy uses student-generated (potentially lower-quality) responses.
+
+#### 23. Token Counting for Fair Comparison
+
+**Problem:** To compare on-policy vs off-policy fairly, we need to track total tokens processed (compute cost), not just steps.
+
+**Fix:** Both scripts now track:
+- Generation tokens (prompt + response)
+- Teacher tokens (doc + prompt + response for each sample)
+- Training tokens (packed sequences)
+
+Results saved with `token_history` for plotting accuracy vs tokens.
+
+#### 24. Verified No Data Leakage
+
+**Concern:** Training and eval use the same 10 patients. Is this cheating?
+
+**Verification:**
+| | Training | Evaluation |
+|--|----------|------------|
+| **Type** | Synthesized prompts ("Summarize section 2...") | Multiple-choice QA |
+| **Count** | 110,112 prompts | 200 questions |
+| **Source** | `longhealth_synthesized` | LongHealth benchmark v5 |
+
+The training prompts are **completely different** from eval questions. The cartridge learns to compress patient documents through diverse synthesized tasks, then is evaluated on held-out QA.
+
+#### 25. Implementation Verification Checklist
+
+| Aspect | On-Policy | Off-Policy |
+|--------|-----------|------------|
+| Response generation | ✅ Student (cartridge) each step | ✅ Teacher (full doc) once at step 0 |
+| Teacher has full doc | ✅ `doc_ids` as KV prefix | ✅ `doc_ids` as KV prefix |
+| KL distillation loss | ✅ `-p_teacher * log(p_student)` | ✅ Same formula |
+| Cache being trained | ✅ `optimizer.step()` updates cache | ✅ Same |
+| Token tracking | ✅ gen + teacher + train | ✅ gen + teacher + train |
+| Data shuffling | ✅ Shuffled to mix patients | ✅ Same |
+
+### Experiment Scripts
+
+| Script | Description |
+|--------|-------------|
+| `scripts/local_cartridge_train.py` | On-policy: regenerates responses each step |
+| `scripts/local_offpolicy_train.py` | Off-policy: pre-generates with teacher, trains on fixed data |
+| `scripts/plot_comparison.py` | Generates accuracy vs tokens comparison plot |
+
 ## On-Policy Training: Issues & Fixes Log
 
 Detailed log of roadblocks encountered during on-policy training setup and how each was solved.

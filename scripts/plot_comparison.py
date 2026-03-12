@@ -1,14 +1,12 @@
 """
 Plot comparison curves: Off-Policy vs On-Policy vs Hybrid.
 
-Reads eval_scores.json files produced by the training scripts and
-generates a matplotlib figure suitable for a Google Doc.
+Reads results JSON files from training scripts and generates a matplotlib figure.
 
 Usage:
-    python plot_comparison.py                             # uses ./results/
-    python plot_comparison.py --off off.json --on on.json # explicit paths
-    python plot_comparison.py --xaxis tokens              # total tokens on x
-    python plot_comparison.py --xaxis steps               # optimizer steps on x
+    python plot_comparison.py --onpolicy results/onpolicy.json --offpolicy results/offpolicy.json
+    python plot_comparison.py --xaxis tokens  # total tokens on x-axis
+    python plot_comparison.py --xaxis steps   # optimizer steps on x-axis
 """
 
 import argparse
@@ -26,113 +24,146 @@ COLORS = {
     "hybrid": "#9C27B0",      # purple
 }
 LABELS = {
-    "off_policy": "Off-Policy (Paper Baseline)",
-    "on_policy": "On-Policy (veRL + Tokasaurus)",
+    "off_policy": "Off-Policy (Teacher generates)",
+    "on_policy": "On-Policy (Student generates)",
     "hybrid": "Hybrid (Warm-start → On-Policy)",
 }
 
 
-def load_eval_log(path: str) -> dict:
-    """Load a single eval_scores.json."""
+def load_results(path: str) -> dict:
+    """Load results JSON file, supporting both local and Modal formats."""
     with open(path) as f:
         data = json.load(f)
-    # Support both {"method": ..., "evals": [...]} and bare [...]
-    if isinstance(data, list):
-        return {"method": "unknown", "evals": data}
     return data
 
 
-def extract_curve(data: dict, score_key: str | None = None):
-    """Extract (x_steps, x_tokens, y_scores) from eval log."""
-    evals = data["evals"]
+def extract_curve_local(data: dict):
+    """Extract (steps, tokens, scores) from local training results format."""
+    # Local format: {"eval_results": [...], "token_history": [...], "config": {...}}
+    if "token_history" in data:
+        steps = [e["step"] for e in data["token_history"]]
+        tokens = [e["tokens"] for e in data["token_history"]]
+        scores = [e["accuracy"] for e in data["token_history"]]
+        return steps, tokens, scores
+    
+    # Also support eval_results directly
+    if "eval_results" in data:
+        steps = [e["step"] for e in data["eval_results"]]
+        tokens = [e.get("tokens", e["step"] * 100000) for e in data["eval_results"]]
+        scores = [e["accuracy"] for e in data["eval_results"]]
+        return steps, tokens, scores
+    
+    # Modal format: {"evals": [...]} or bare list
+    evals = data.get("evals", data if isinstance(data, list) else [])
     steps, tokens, scores = [], [], []
     for entry in evals:
-        s = entry["scores"]
-        # Auto-detect score key
-        if score_key is None:
-            score_key = next(
-                (k for k in s if "score" in k.lower()), list(s.keys())[0]
-            )
-        if score_key in s:
+        if "optimizer_step" in entry:
             steps.append(entry["optimizer_step"])
             tokens.append(entry.get("total_tokens", entry["optimizer_step"] * 32 * 2048))
-            scores.append(s[score_key] * 100)  # convert to %
-    return steps, tokens, scores, score_key
+            # Find score key
+            s = entry.get("scores", entry)
+            score_key = next((k for k in s if "score" in k.lower() or "accuracy" in k.lower()), None)
+            if score_key:
+                score = s[score_key]
+                scores.append(score * 100 if score < 1 else score)
+    
+    return steps, tokens, scores
 
 
 def plot(
-    curves: dict[str, dict],
-    xaxis: str = "steps",
+    curves: dict[str, tuple],
+    xaxis: str = "tokens",
     title: str = "LongHealth Accuracy: Off-Policy vs On-Policy",
     out: str = "comparison.png",
 ):
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-    for method, data in curves.items():
-        steps, tokens, scores, key = extract_curve(data)
+    for method, (steps, tokens, scores) in curves.items():
         x = steps if xaxis == "steps" else tokens
         color = COLORS.get(method, "#666")
         label = LABELS.get(method, method)
-        ax.plot(x, scores, "o-", color=color, label=label, linewidth=2, markersize=5)
+        ax.plot(x, scores, "o-", color=color, label=label, linewidth=2.5, markersize=7)
 
     ax.set_xlabel(
-        "Optimizer Steps" if xaxis == "steps" else "Total Tokens Processed"
+        "Training Steps" if xaxis == "steps" else "Total Tokens Processed",
+        fontsize=14
     )
-    ax.set_ylabel("LongHealth Accuracy (%)")
-    ax.set_title(title)
-    ax.legend(loc="lower right", framealpha=0.9)
+    ax.set_ylabel("LongHealth Accuracy (%)", fontsize=14)
+    ax.set_title(title, fontsize=16, fontweight="bold")
+    ax.legend(loc="lower right", framealpha=0.9, fontsize=12)
     ax.grid(True, alpha=0.3)
     ax.set_ylim(bottom=0)
 
     if xaxis == "tokens":
         ax.xaxis.set_major_formatter(
-            matplotlib.ticker.FuncFormatter(lambda x, _: f"{x/1e6:.1f}M")
+            matplotlib.ticker.FuncFormatter(lambda x, _: f"{x/1e6:.1f}M" if x >= 1e6 else f"{x/1e3:.0f}K")
         )
 
     plt.tight_layout()
     plt.savefig(out, dpi=200, bbox_inches="tight")
     print(f"Saved plot to {out}")
-    plt.show()
+    
+    # Print summary table
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print("=" * 60)
+    for method, (steps, tokens, scores) in curves.items():
+        print(f"\n{LABELS.get(method, method)}:")
+        print(f"  Steps: {min(steps)} → {max(steps)}")
+        print(f"  Tokens: {min(tokens):,} → {max(tokens):,}")
+        print(f"  Accuracy: {scores[0]:.1f}% → {scores[-1]:.1f}% (Δ{scores[-1]-scores[0]:+.1f}%)")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Plot cartridge training comparison")
-    parser.add_argument("--off", type=str, help="Path to off-policy eval_scores.json")
-    parser.add_argument("--on", type=str, help="Path to on-policy eval_scores.json")
-    parser.add_argument("--hybrid", type=str, help="Path to hybrid eval_scores.json")
+    parser.add_argument("--onpolicy", type=str, help="Path to on-policy results JSON")
+    parser.add_argument("--offpolicy", type=str, help="Path to off-policy results JSON")
+    parser.add_argument("--hybrid", type=str, help="Path to hybrid results JSON")
     parser.add_argument(
         "--xaxis",
         choices=["steps", "tokens"],
-        default="steps",
-        help="X-axis: optimizer steps or total tokens",
+        default="tokens",
+        help="X-axis: training steps or total tokens (default: tokens)",
     )
-    parser.add_argument("--out", default="comparison.png", help="Output file path")
+    parser.add_argument("--output", "-o", default="comparison.png", help="Output file path")
     parser.add_argument("--title", default=None, help="Plot title")
     args = parser.parse_args()
 
     curves = {}
-    if args.off:
-        curves["off_policy"] = load_eval_log(args.off)
-    if args.on:
-        curves["on_policy"] = load_eval_log(args.on)
+    
+    if args.onpolicy:
+        data = load_results(args.onpolicy)
+        curves["on_policy"] = extract_curve_local(data)
+        print(f"Loaded on-policy: {args.onpolicy}")
+    
+    if args.offpolicy:
+        data = load_results(args.offpolicy)
+        curves["off_policy"] = extract_curve_local(data)
+        print(f"Loaded off-policy: {args.offpolicy}")
+    
     if args.hybrid:
-        curves["hybrid"] = load_eval_log(args.hybrid)
+        data = load_results(args.hybrid)
+        curves["hybrid"] = extract_curve_local(data)
+        print(f"Loaded hybrid: {args.hybrid}")
 
-    # Auto-discover from ./results/ if nothing specified
+    # Auto-discover from local_checkpoints if nothing specified
     if not curves:
-        results = Path("results")
-        for p in results.glob("**/eval_scores.json"):
-            data = load_eval_log(str(p))
-            method = data.get("method", p.parent.name)
-            curves[method] = data
-            print(f"Found: {method} → {p}")
+        checkpoints = Path("local_checkpoints")
+        for results_file in checkpoints.glob("**/onpolicy_results.json"):
+            data = load_results(str(results_file))
+            curves["on_policy"] = extract_curve_local(data)
+            print(f"Found on-policy: {results_file}")
+        for results_file in checkpoints.glob("**/offpolicy_results.json"):
+            data = load_results(str(results_file))
+            curves["off_policy"] = extract_curve_local(data)
+            print(f"Found off-policy: {results_file}")
 
     if not curves:
-        print("No eval data found. Pass --off/--on/--hybrid or place files in ./results/")
+        print("No results found. Run training scripts first or pass --onpolicy/--offpolicy paths.")
         return
 
-    title = args.title or "LongHealth Accuracy: Off-Policy vs On-Policy"
-    plot(curves, xaxis=args.xaxis, title=title, out=args.out)
+    title = args.title or "On-Policy vs Off-Policy Cartridge Training"
+    plot(curves, xaxis=args.xaxis, title=title, out=args.output)
 
 
 if __name__ == "__main__":
