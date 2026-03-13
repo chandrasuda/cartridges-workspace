@@ -71,6 +71,8 @@ from cartridges.generation import flex_generate
 logger.info("  - Imported generation module (flex_generate)")
 from cartridges.data.longhealth.evals import LongHealthMultipleChoiceGenerateDataset
 logger.info("  - Imported LongHealthMultipleChoiceGenerateDataset (official eval)")
+from cartridges.data.longhealth.resources import LongHealthResource
+logger.info("  - Imported LongHealthResource (for cache init)")
 logger.info("All cartridges modules imported successfully!")
 
 
@@ -505,52 +507,24 @@ def train(
     logger.info(f"  - Columns: {list(train_df.columns)}")
     logger.info(f"  - Patient distribution in first 100: {train_df['patient_id'].head(100).value_counts().to_dict()}")
 
-    # Load patient documents BEFORE cache initialization (following Cartridges paper)
-    logger.info("-" * 50)
-    logger.info("Downloading LongHealth benchmark data...")
-    lh_data = requests.get(
-        "https://raw.githubusercontent.com/kbressem/LongHealth/refs/heads/main/data/benchmark_v5.json"
-    ).json()
-    patient_doc_ids = {}
-    patient_doc_texts = {}
-    total_doc_tokens = 0
-    for pid, patient in lh_data.items():
-        doc_text = "\n\n".join(f"--- {did} ---\n{txt}" for did, txt in patient["texts"].items())
-        patient_doc_texts[pid] = doc_text
-        patient_doc_ids[pid] = tokenizer.encode(doc_text, add_special_tokens=False)
-        total_doc_tokens += len(patient_doc_ids[pid])
-    logger.info(f"  - Loaded {len(patient_doc_ids)} patient documents")
-    logger.info(f"  - Total document tokens: {total_doc_tokens:,}")
-    logger.info(f"  - Average tokens per document: {total_doc_tokens // len(patient_doc_ids):,}")
-
     # ==========================================================================
-    # CACHE INITIALIZATION (following Cartridges paper arXiv:2506.06266)
-    # Initialize from ACTUAL patient documents, not random Wikipedia text!
-    # The paper initializes from the first p tokens of the target corpus.
-    # For multi-patient training, we concatenate samples from each patient.
+    # CACHE INITIALIZATION (using official LongHealthResource format)
+    # Must match off-policy format exactly for fair comparison!
+    # Uses structured XML format with patient metadata (name, birthday, diagnosis)
     # ==========================================================================
     logger.info("-" * 50)
     logger.info(f"Initializing trainable cache with {num_tokens} tokens...")
-    logger.info("  - Using FIRST P TOKENS initialization (per Cartridges paper Section 3)")
+    logger.info("  - Using LongHealthResource.to_string() (SAME as off-policy)")
     
-    # PAPER METHOD: Concatenate all patient documents, then take FIRST p tokens
-    # "We initialize the trainable cache from the first p tokens of the target corpus"
+    # Get patient IDs from training data
     training_patients = sorted(train_df["patient_id"].unique())
     logger.info(f"  - Training patients: {training_patients}")
     
-    # Concatenate ALL patient documents into one corpus (like paper does)
-    corpus_parts = []
-    for pid in training_patients:
-        if pid in patient_doc_texts:
-            corpus_parts.append(patient_doc_texts[pid])
-    
-    full_corpus = "\n\n".join(corpus_parts)
-    logger.info(f"  - Full corpus: {len(full_corpus):,} chars from {len(corpus_parts)} patients")
-    
-    # Take just the FIRST portion (will be truncated to num_tokens by KVFromText)
-    # No need to pre-truncate - KVFromText handles max_tokens
-    init_text = full_corpus
-    logger.info(f"  - Init will use first {num_tokens} tokens of concatenated corpus")
+    # Use OFFICIAL LongHealthResource format (matches off-policy exactly!)
+    resource = LongHealthResource(config=LongHealthResource.Config(patient_ids=training_patients))
+    init_text = resource.to_string()
+    logger.info(f"  - Generated init text: {len(init_text):,} chars using LongHealthResource.to_string()")
+    logger.info(f"  - Format: <patient-record-X> with name, birthday, diagnosis, structured notes")
     
     # Write to temp file for KVFromText initializer
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
