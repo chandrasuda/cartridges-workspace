@@ -615,9 +615,9 @@ def train_offpolicy(
     
     eval_results = []
     total_tokens = 0
-    # For fair comparison: count total sequence tokens (same metric as on-policy)
-    # This represents the total "training data" in tokens
-    logger.info(f"Token counting: sequence length per sample (fair comparison)")
+    # For fair comparison: count doc_context + sequence tokens (same as on-policy)
+    # On-policy counts ~4000 doc tokens + ~500 prompt+response per sample
+    logger.info(f"Token counting: doc_context (4000) + sequence per sample (FAIR with on-policy)")
     token_history = []
     
     # Step 0 evaluation
@@ -716,9 +716,11 @@ def train_offpolicy(
             element_ids = torch.cat([element_ids, torch.zeros(pad_len, dtype=torch.long)])
             position_ids = torch.cat([position_ids, torch.zeros(pad_len, dtype=torch.long)])
         
-        # Track tokens: total sequence length per sample (fair comparison with on-policy)
-        # On-policy counts doc + prompt + response per sample, we count input_ids length
-        batch_seq_tokens = sum(len(elem.input_ids) for elem in batch_elements)
+        # Track tokens: FAIR comparison with on-policy
+        # On-policy counts: doc_context (~4000) + prompt + response per sample
+        # Off-policy must count the same: doc_context + sequence_length
+        DOC_CONTEXT_TOKENS = 4000  # approximate doc context per sample (same as on-policy)
+        batch_seq_tokens = sum(len(elem.input_ids) + DOC_CONTEXT_TOKENS for elem in batch_elements)
         total_tokens += batch_seq_tokens
         
         if topk_ids_list:
