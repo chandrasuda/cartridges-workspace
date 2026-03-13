@@ -9,7 +9,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v80-batchgen"
+WORKSPACE_VERSION = "v82-fix-cache-init"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
