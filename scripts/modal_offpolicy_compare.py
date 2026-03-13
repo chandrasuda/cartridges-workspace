@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v79-patient-doc-init"
+WORKSPACE_VERSION = "v81-eval-capture-fix"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
