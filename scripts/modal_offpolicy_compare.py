@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v65-fair-token-count"
+WORKSPACE_VERSION = "v66-incremental-gen-tokens"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 

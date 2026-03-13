@@ -615,10 +615,10 @@ def train_offpolicy(
     logger.info(f"  - Log file: {log_file_path}")
     
     eval_results = []
-    # Start with pre-computed generation tokens for FAIR comparison with on-policy
-    # On-policy counts generation tokens, so off-policy must too
-    total_tokens = precomputed_gen_tokens
-    logger.info(f"Starting token count at {total_tokens:,} (pre-computed generation cost)")
+    total_tokens = 0
+    # Track average tokens per sample for fair generation cost estimation
+    avg_tokens_per_sample = precomputed_gen_tokens / len(train_elements)
+    logger.info(f"Avg tokens per sample: {avg_tokens_per_sample:.1f} (for fair generation cost)")
     token_history = []
     
     # Step 0 evaluation
@@ -717,8 +717,10 @@ def train_offpolicy(
             element_ids = torch.cat([element_ids, torch.zeros(pad_len, dtype=torch.long)])
             position_ids = torch.cat([position_ids, torch.zeros(pad_len, dtype=torch.long)])
         
-        # Track training tokens
-        total_tokens += curr_offset  # actual tokens, not padded
+        # Track tokens: generation cost (what it would cost to generate these samples) + training
+        # For fair comparison with on-policy which counts generation tokens
+        batch_gen_tokens = len(batch_elements) * int(avg_tokens_per_sample)  # generation cost
+        total_tokens += batch_gen_tokens + curr_offset  # gen + train
         
         if topk_ids_list:
             # Flatten to 1D for indexing (these are already 1D from cartridges)
