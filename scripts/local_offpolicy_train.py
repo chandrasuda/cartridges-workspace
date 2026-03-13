@@ -573,6 +573,8 @@ def train_offpolicy(
     # Load evaluation questions
     EVAL_PATIENT_IDS = {f"patient_{i:02d}" for i in range(1, 11)}
     eval_questions = load_eval_questions(lh_data, EVAL_PATIENT_IDS)
+    # CRITICAL: Use same seed as on-policy for consistent eval ordering
+    np.random.seed(42)
     np.random.shuffle(eval_questions)
     logger.info(f"Loaded {len(eval_questions)} eval questions")
     
