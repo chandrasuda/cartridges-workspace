@@ -576,8 +576,11 @@ def train_offpolicy(
     np.random.shuffle(eval_questions)
     logger.info(f"Loaded {len(eval_questions)} eval questions")
     
-    # Initialize cache from patient documents
-    training_patients = list(patient_doc_texts.keys())[:10]  # Use first 10 patients
+    # Initialize cache from patient documents (MUST MATCH on-policy exactly!)
+    # Use the SAME patients as on-policy training: patients 1-10 (from training data)
+    TRAIN_PATIENT_IDS = {f"patient_{i:02d}" for i in range(1, 11)}
+    training_patients = sorted([pid for pid in patient_doc_texts.keys() if pid in TRAIN_PATIENT_IDS])
+    logger.info(f"  - Training patients (sorted, matching on-policy): {training_patients}")
     tokens_per_patient = num_tokens // len(training_patients)
     init_text_parts = []
     for pid in training_patients:
