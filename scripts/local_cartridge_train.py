@@ -533,27 +533,26 @@ def train(
     # ==========================================================================
     logger.info("-" * 50)
     logger.info(f"Initializing trainable cache with {num_tokens} tokens...")
-    logger.info("  - Using PATIENT DOCUMENT initialization (per Cartridges paper)")
+    logger.info("  - Using FIRST P TOKENS initialization (per Cartridges paper Section 3)")
     
-    # Get the patients we're training on
+    # PAPER METHOD: Concatenate all patient documents, then take FIRST p tokens
+    # "We initialize the trainable cache from the first p tokens of the target corpus"
     training_patients = sorted(train_df["patient_id"].unique())
     logger.info(f"  - Training patients: {training_patients}")
     
-    # Create initialization text from patient documents
-    # Take first (num_tokens // num_patients) tokens from each patient
-    tokens_per_patient = num_tokens // len(training_patients)
-    init_text_parts = []
+    # Concatenate ALL patient documents into one corpus (like paper does)
+    corpus_parts = []
     for pid in training_patients:
         if pid in patient_doc_texts:
-            # Get the first portion of this patient's document
-            doc_text = patient_doc_texts[pid]
-            # Truncate to approximately tokens_per_patient worth of text
-            # (rough estimate: 4 chars per token)
-            char_limit = tokens_per_patient * 4
-            init_text_parts.append(doc_text[:char_limit])
+            corpus_parts.append(patient_doc_texts[pid])
     
-    init_text = "\n\n".join(init_text_parts)
-    logger.info(f"  - Initialization text: {len(init_text):,} chars from {len(init_text_parts)} patients")
+    full_corpus = "\n\n".join(corpus_parts)
+    logger.info(f"  - Full corpus: {len(full_corpus):,} chars from {len(corpus_parts)} patients")
+    
+    # Take just the FIRST portion (will be truncated to num_tokens by KVFromText)
+    # No need to pre-truncate - KVFromText handles max_tokens
+    init_text = full_corpus
+    logger.info(f"  - Init will use first {num_tokens} tokens of concatenated corpus")
     
     # Write to temp file for KVFromText initializer
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:

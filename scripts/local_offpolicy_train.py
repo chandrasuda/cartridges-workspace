@@ -579,17 +579,23 @@ def train_offpolicy(
     logger.info(f"Loaded {len(eval_questions)} eval questions")
     
     # Initialize cache from patient documents (MUST MATCH on-policy exactly!)
-    # Use the SAME patients as on-policy training: patients 1-10 (from training data)
+    # PAPER METHOD: Concatenate all patient documents, then take FIRST p tokens
+    # "We initialize the trainable cache from the first p tokens of the target corpus"
     TRAIN_PATIENT_IDS = {f"patient_{i:02d}" for i in range(1, 11)}
     training_patients = sorted([pid for pid in patient_doc_texts.keys() if pid in TRAIN_PATIENT_IDS])
-    logger.info(f"  - Training patients (sorted, matching on-policy): {training_patients}")
-    tokens_per_patient = num_tokens // len(training_patients)
-    init_text_parts = []
+    logger.info(f"  - Training patients (sorted): {training_patients}")
+    
+    # Concatenate ALL patient documents into one corpus (like paper does)
+    corpus_parts = []
     for pid in training_patients:
-        doc_text = patient_doc_texts[pid]
-        char_limit = tokens_per_patient * 4
-        init_text_parts.append(doc_text[:char_limit])
-    init_text = "\n\n".join(init_text_parts)
+        corpus_parts.append(patient_doc_texts[pid])
+    
+    full_corpus = "\n\n".join(corpus_parts)
+    logger.info(f"  - Full corpus: {len(full_corpus):,} chars from {len(corpus_parts)} patients")
+    
+    # Take FIRST p tokens of concatenated corpus (KVFromText handles truncation)
+    init_text = full_corpus
+    logger.info(f"  - Init will use first {num_tokens} tokens of concatenated corpus")
     
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
         f.write(init_text)
