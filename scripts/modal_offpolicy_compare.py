@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v75-eval-every-50"
+WORKSPACE_VERSION = "v76-save-evals"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
@@ -142,12 +142,50 @@ def train():
         name="offpolicy_compare",
     )
     
+    # Attach a logging handler that captures eval scores and saves to JSON
+    import logging
+    import re
+
+    EVALS_PATH = "/results/offpolicy/evals.json"
+    os.makedirs("/results/offpolicy", exist_ok=True)
+    evals = []
+
+    class EvalSaver(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.current_step = None
+
+        def emit(self, record):
+            msg = record.getMessage()
+
+            # Track step from "Generating [step=N]" lines
+            m = re.search(r'\[step=(\d+)\]', msg)
+            if m:
+                self.current_step = int(m.group(1))
+
+            # Capture score: {'generate_longhealth_p10/score': np.float64(0.28)}
+            if 'score' in msg and 'float' in msg:
+                m2 = re.search(r'[\d.]+\)', msg)  # grab the number before closing paren
+                m2 = re.search(r'float\w*\(([\d.]+)\)', msg)
+                if m2 and self.current_step is not None:
+                    score = float(m2.group(1))
+                    entry = {"step": self.current_step, "accuracy": round(score * 100, 1)}
+                    evals.append(entry)
+                    with open(EVALS_PATH, 'w') as f:
+                        json.dump({"evals": evals}, f, indent=2)
+                    results_volume.commit()
+                    print(f"✓ EVAL SAVED — step={self.current_step}, accuracy={score*100:.1f}%", flush=True)
+
+    handler = EvalSaver()
+    logging.getLogger().addHandler(handler)
+    logging.getLogger("cartridges").addHandler(handler)
+
     # Run training (step 0 eval happens automatically since 0 % 50 == 0)
     print("Running training with pydrantic...")
     pydrantic.main(config)
-    
+
     results_volume.commit()
-    print("Training complete!")
+    print(f"Training complete! Evals saved to {EVALS_PATH}")
     return 0
 
 
