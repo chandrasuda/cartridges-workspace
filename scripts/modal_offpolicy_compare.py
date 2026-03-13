@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v78-stdout-capture"
+WORKSPACE_VERSION = "v79-patient-doc-init"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
@@ -79,13 +79,25 @@ def train():
     from cartridges.models.config import HFModelConfig
     from cartridges.datasets import TrainDataset, DataSource
     from cartridges.data.longhealth.evals import LongHealthMultipleChoiceGenerateDataset
+    from cartridges.data.longhealth.resources import LongHealthResource
     from cartridges.utils.wandb import WandBConfig
     from cartridges.models.llama.modeling_llama import FlexLlamaForCausalLM
     import pydrantic
+    import tempfile
     
     NUM_TOKENS = 512  # Our cache size
     NUM_PATIENTS = 10
     patient_ids = [f"patient_{idx:02d}" for idx in range(1, NUM_PATIENTS + 1)]
+    
+    # Write patient docs to temp file for cache init (same as on-policy)
+    print("Building patient document text for cache initialization...")
+    resource = LongHealthResource(config=LongHealthResource.Config(patient_ids=patient_ids))
+    patient_text = resource.to_string()
+    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+    tmp.write(patient_text)
+    tmp.close()
+    patient_text_path = tmp.name
+    print(f"Patient text written to {patient_text_path} ({len(patient_text):,} chars)")
     
     # Their exact data sources
     data_sources = [
@@ -110,7 +122,10 @@ def train():
             pretrained_model_name_or_path="meta-llama/Llama-3.2-3B-Instruct",
             model_cls=FlexLlamaForCausalLM,
         ),
-        kv_cache_initializer=KVFromText.Config(max_tokens=NUM_TOKENS),
+        kv_cache_initializer=KVFromText.Config(
+            max_tokens=NUM_TOKENS,
+            text_source=patient_text_path,  # init from patient docs, same as on-policy
+        ),
         
         lr=2e-2,
         epochs=2,
