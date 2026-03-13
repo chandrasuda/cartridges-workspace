@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v77-eval-at-step0"
+WORKSPACE_VERSION = "v78-stdout-capture"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
@@ -142,43 +142,49 @@ def train():
         name="offpolicy_compare",
     )
     
-    # Attach a logging handler that captures eval scores and saves to JSON
-    import logging
+    # Wrap stdout to intercept ALL output (tqdm + logging both go to stdout)
     import re
+    import sys
 
     EVALS_PATH = "/results/offpolicy/evals.json"
     os.makedirs("/results/offpolicy", exist_ok=True)
     evals = []
 
-    class EvalSaver(logging.Handler):
-        def __init__(self):
-            super().__init__()
+    class EvalCapture:
+        """Wraps stdout, tracks step from tqdm lines, saves score to JSON."""
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
             self.current_step = None
 
-        def emit(self, record):
-            msg = record.getMessage()
-
-            # Track step from "Generating [step=N]" lines
-            m = re.search(r'\[step=(\d+)\]', msg)
+        def write(self, text):
+            self.wrapped.write(text)
+            self.wrapped.flush()
+            # Track step from tqdm: "Generating [step=0]"
+            m = re.search(r'step=(\d+)', text)
             if m:
                 self.current_step = int(m.group(1))
-
             # Capture score: {'generate_longhealth_p10/score': np.float64(0.28)}
-            if 'score' in msg and 'float' in msg:
-                m2 = re.search(r'[\d.]+\)', msg)  # grab the number before closing paren
-                m2 = re.search(r'float\w*\(([\d.]+)\)', msg)
+            if 'score' in text and 'float' in text:
+                m2 = re.search(r'float\w*\(([\d.]+)\)', text)
                 if m2 and self.current_step is not None:
                     score = float(m2.group(1))
                     entry = {"step": self.current_step, "accuracy": round(score * 100, 1)}
-                    evals.append(entry)
-                    with open(EVALS_PATH, 'w') as f:
-                        json.dump({"evals": evals}, f, indent=2)
-                    results_volume.commit()
-                    print(f"✓ EVAL SAVED — step={self.current_step}, accuracy={score*100:.1f}%", flush=True)
+                    # Avoid duplicates
+                    if not any(e["step"] == self.current_step for e in evals):
+                        evals.append(entry)
+                        with open(EVALS_PATH, 'w') as f:
+                            json.dump({"evals": evals}, f, indent=2)
+                        results_volume.commit()
+                        self.wrapped.write(f"\n✓ EVAL SAVED — step={self.current_step}, accuracy={score*100:.1f}%\n")
+                        self.wrapped.flush()
 
-    handler = EvalSaver()
-    logging.getLogger().addHandler(handler)
-    logging.getLogger("cartridges").addHandler(handler)
+        def flush(self):
+            self.wrapped.flush()
+
+        def fileno(self):
+            return self.wrapped.fileno()
+
+    sys.stdout = EvalCapture(sys.stdout)
 
     # Run training (step 0 eval happens automatically since 0 % 50 == 0)
     print("Running training with pydrantic...")
