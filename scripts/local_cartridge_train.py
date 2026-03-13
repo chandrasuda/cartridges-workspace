@@ -69,6 +69,8 @@ from cartridges.train import CacheAndModel
 logger.info("  - Imported train module (CacheAndModel)")
 from cartridges.generation import flex_generate
 logger.info("  - Imported generation module (flex_generate)")
+from cartridges.data.longhealth.evals import LongHealthMultipleChoiceGenerateDataset
+logger.info("  - Imported LongHealthMultipleChoiceGenerateDataset (official eval)")
 logger.info("All cartridges modules imported successfully!")
 
 
@@ -125,81 +127,67 @@ def evaluate_cache(
     flex_model,
     tokenizer,
     cache: TrainableCache,
-    eval_questions: list,
+    eval_dataset: LongHealthMultipleChoiceGenerateDataset,
     device: str,
     step: int,
     max_eval_samples: int = None,
+    temperature: float = 0.3,
+    max_new_tokens: int = 512,
 ) -> dict:
     """
-    Evaluate the current cache on the test set.
-    
-    Args:
-        flex_model: The FlexLlama model
-        tokenizer: The tokenizer
-        cache: The trainable cache to evaluate
-        eval_questions: List of evaluation questions
-        device: Device to run on
-        step: Current training step (for logging)
-        max_eval_samples: Maximum number of samples to evaluate (None = all)
-    
-    Returns:
-        dict with evaluation results
+    Evaluate using the official LongHealthMultipleChoiceGenerateDataset.
+    Matches off-policy eval exactly: temperature=0.3, max_new_tokens=512, CoT prompting.
     """
-    logger.info(f"  [EVAL] Evaluating at step {step}...")
-    
-    questions_to_eval = eval_questions
-    if max_eval_samples is not None and max_eval_samples < len(eval_questions):
-        questions_to_eval = eval_questions[:max_eval_samples]
-    
-    correct_count = 0
-    total_count = len(questions_to_eval)
+    logger.info(f"  [EVAL] Evaluating at step {step} (official LongHealth eval)...")
     eval_t0 = time.time()
-    
-    for qi, q in enumerate(questions_to_eval):
-        ids = tokenizer.encode(q["prompt"])
-        input_ids = torch.tensor(ids, dtype=torch.long, device=device)
-        seq_ids = torch.zeros_like(input_ids)
-        position_ids = torch.arange(len(ids), dtype=torch.long, device=device)
-        
+
+    questions = eval_dataset.questions
+    if max_eval_samples is not None:
+        questions = questions[:max_eval_samples]
+
+    correct_count = 0
+    total_count = len(questions)
+
+    for qi, question in enumerate(questions):
+        input_ids = tokenizer.apply_chat_template(
+            [{"role": "user", "content": question.question}],
+            add_generation_prompt=True,
+            tokenize=True,
+        )
+        ids_t = torch.tensor(input_ids, dtype=torch.long, device=device)
+        seq_ids = torch.zeros_like(ids_t)
+        position_ids = torch.arange(len(input_ids), dtype=torch.long, device=device)
+
         cache.clear()
-        
         try:
             gen_output = flex_generate(
                 model=flex_model,
                 tokenizer=tokenizer,
                 cache=cache,
-                input_ids=input_ids,
+                input_ids=ids_t,
                 seq_ids=seq_ids,
                 position_ids=position_ids,
-                max_new_tokens=10,
-                temperature=0.0,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
             )
             gen_tokens = gen_output.get(0, [])
             gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True)
-            pred = extract_answer(gen_text)
         except Exception as e:
             logger.debug(f"    Eval generation failed for Q{qi}: {e}")
-            pred = "?"
-        
-        if pred == q["correct"]:
+            gen_text = ""
+
+        is_correct, meta = eval_dataset.score(gen_text, question.correct, question.question_id)
+        if is_correct:
             correct_count += 1
-        
-        # Log all predictions (to persistent log file)
-        logger.debug(f"    Q{qi}: pred='{pred}' correct='{q['correct']}' | gen='{gen_text[:50]}...' ")
-        
-        # Progress every 20 questions
+
         if (qi + 1) % 20 == 0:
-            running_acc = correct_count / (qi + 1) * 100
-            logger.debug(f"    [{qi+1}/{total_count}] running acc={running_acc:.1f}%")
-    
+            logger.debug(f"    [{qi+1}/{total_count}] running acc={correct_count/(qi+1)*100:.1f}%")
+
     eval_elapsed = time.time() - eval_t0
     accuracy = correct_count / total_count * 100
-    
     logger.info(f"  [EVAL] Step {step}: {correct_count}/{total_count} = {accuracy:.1f}% ({eval_elapsed:.1f}s)")
-    
-    # Clear cache after eval
     cleanup_memory(device)
-    
+
     return {
         "step": step,
         "correct": correct_count,
@@ -580,16 +568,16 @@ def train(
     optimizer = optim.Adam(cache.parameters(), lr=lr)
     logger.info(f"  - Optimizer: Adam(lr={lr})")
 
-    # Load evaluation questions (patients 1-10 for test set)
+    # Load evaluation questions using OFFICIAL LongHealth eval (matches off-policy exactly)
     logger.info("-" * 50)
-    logger.info("Loading evaluation questions...")
-    EVAL_PATIENT_IDS = {f"patient_{i:02d}" for i in range(1, 11)}
-    eval_questions = load_eval_questions(lh_data, EVAL_PATIENT_IDS)
-    # CRITICAL: Shuffle eval questions to get balanced patient coverage when using max_eval_samples
-    np.random.seed(42)
-    np.random.shuffle(eval_questions)
-    logger.info(f"  - Loaded {len(eval_questions)} evaluation questions (SHUFFLED for balanced coverage)")
-    logger.info(f"  - Evaluation patients: {sorted(EVAL_PATIENT_IDS)}")
+    logger.info("Loading evaluation dataset (official LongHealthMultipleChoiceGenerateDataset)...")
+    patient_ids = [f"patient_{i:02d}" for i in range(1, 11)]
+    eval_dataset = LongHealthMultipleChoiceGenerateDataset(
+        config=LongHealthMultipleChoiceGenerateDataset.Config(patient_ids=patient_ids),
+        tokenizer=tokenizer,
+        seed=42,
+    )
+    logger.info(f"  - Loaded {len(eval_dataset)} eval questions (temp=0.3, max_new_tokens=512, CoT)")
 
     os.makedirs(save_dir, exist_ok=True)
     logger.info(f"  - Save directory: {save_dir}")
@@ -631,7 +619,7 @@ def train(
         flex_model=flex_model,
         tokenizer=tokenizer,
         cache=cache,
-        eval_questions=eval_questions,
+        eval_dataset=eval_dataset,
         device=device,
         step=0,
         max_eval_samples=max_eval_samples,
@@ -793,7 +781,7 @@ def train(
                 flex_model=flex_model,
                 tokenizer=tokenizer,
                 cache=cache,
-                eval_questions=eval_questions,
+                eval_dataset=eval_dataset,
                 device=device,
                 step=step,
                 max_eval_samples=max_eval_samples,
