@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v76-save-evals"
+WORKSPACE_VERSION = "v77-eval-at-step0"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
@@ -124,7 +124,7 @@ def train():
         ),
         
         save_every_n_steps=50,
-        generate_eval_every_n_steps=50,  # Changed from 128 to 50
+        generate_eval_every_n_steps=50,  # also evals at step 0 (generate_before_training defaults True)
         generate_evals=[
             GenerationEvalConfig(
                 dataset=LongHealthMultipleChoiceGenerateDataset.Config(
