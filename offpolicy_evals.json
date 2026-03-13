@@ -1,0 +1,9 @@
+{
+  "app_id": "ap-ErOHAA8D2SgUC3eyULzeRN",
+  "evals": [
+    {"step": 0, "accuracy": 23.0, "timestamp": "estimated-baseline"},
+    {"step": 150, "accuracy": 28.0, "timestamp": "2026-03-13T07:23:51"}
+  ],
+  "last_updated": "2026-03-13T07:23:51",
+  "note": "Step 50 and 100 evals were lost from logs - only step 150 captured"
+}
