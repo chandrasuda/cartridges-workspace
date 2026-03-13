@@ -1,11 +1,10 @@
 """
-Off-policy cartridge training on Modal — Runs EXACT official cartridges code.
+Off-policy cartridge training on Modal — Uses official cartridges components.
 
-This runs the official longhealth_train.py from HazyResearch with:
-- NUM_TOKENS=512 (our cache size)
-- MODEL=llama (Llama-3.2-3B-Instruct)
-
-Their code handles everything: truncation, packing, evaluation, etc.
+Same as official longhealth_train.py but with:
+- NUM_TOKENS=512 (cache size)
+- Eval every 50 steps (not 128)
+- Step 0 eval included
 
 Usage:
     modal run --detach scripts/modal_offpolicy_compare.py
@@ -13,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v73-run-exact-official-code"
+WORKSPACE_VERSION = "v75-eval-every-50"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
@@ -25,12 +24,9 @@ image = (
     .apt_install("git")
     .env({
         "CUDA_HOME": "/usr/local/cuda",
-        # These are the ONLY changes from their defaults:
-        "NUM_TOKENS": "512",  # Cache size (their default is 2048)
-        "MODEL": "llama",     # Use Llama-3.2-3B (their code supports this)
         "CARTRIDGES_DIR": "/opt/cartridges",
         "CARTRIDGES_OUTPUT_DIR": "/results",
-        "WANDB_MODE": "disabled",  # We don't need wandb
+        "WANDB_MODE": "disabled",
     })
     .pip_install("torch==2.6.0", "packaging", "numpy")
     .run_commands(
@@ -66,80 +62,100 @@ app = modal.App("offpolicy-compare", image=image)
 )
 def train():
     """
-    Run the EXACT official longhealth_train.py from cartridges repo.
+    Off-policy training using official cartridges components.
     
-    Their config (from longhealth_train.py):
-    - lr=2e-2 (0.02)
-    - epochs=2
-    - global_batch_size=32
-    - packed_seq_length=2048
-    - packing_mode="truncate"
-    - generate_eval_every_n_steps=128
-    - save_every_n_steps=512
-    
-    We only change via env vars:
+    Same as their longhealth_train.py but with:
     - NUM_TOKENS=512 (cache size)
-    - MODEL=llama
+    - generate_eval_every_n_steps=50 (not 128)
+    - Step 0 eval included
     """
-    import subprocess
-    import sys
     import os
+    import json
+    import time
     
-    print("=" * 70)
-    print("RUNNING OFFICIAL CARTRIDGES longhealth_train.py")
-    print("=" * 70)
-    print("Environment (our only changes):")
-    print(f"  NUM_TOKENS={os.environ.get('NUM_TOKENS')}")
-    print(f"  MODEL={os.environ.get('MODEL')}")
-    print("")
-    print("Their config (unchanged):")
-    print("  lr=0.02")
-    print("  epochs=2") 
-    print("  global_batch_size=32")
-    print("  packed_seq_length=2048")
-    print("  packing_mode=truncate")
-    print("  generate_eval_every_n_steps=128")
-    print("=" * 70)
+    # Use their exact imports
+    from cartridges.initialization import KVFromText
+    from cartridges.train import GenerationEvalConfig, TrainConfig
+    from cartridges.models.config import HFModelConfig
+    from cartridges.datasets import TrainDataset, DataSource
+    from cartridges.data.longhealth.evals import LongHealthMultipleChoiceGenerateDataset
+    from cartridges.utils.wandb import WandBConfig
+    from cartridges.models.llama.modeling_llama import FlexLlamaForCausalLM
+    import pydrantic
     
-    # Run their EXACT script
-    cmd = [
-        sys.executable,
-        "/opt/cartridges/examples/benchmarks/longhealth/longhealth_train.py",
+    NUM_TOKENS = 512  # Our cache size
+    NUM_PATIENTS = 10
+    patient_ids = [f"patient_{idx:02d}" for idx in range(1, NUM_PATIENTS + 1)]
+    
+    # Their exact data sources
+    data_sources = [
+        "hazyresearch/m07d11_longhealth_synthesize_llama-3.2-3b_p10_n65536-0",
+        "hazyresearch/m07d11_longhealth_synthesize_llama-3.2-3b_p10_n65536-1",
+        "hazyresearch/m07d11_longhealth_synthesize_llama-3.2-3b_p10_n65536-2"
     ]
     
-    result = subprocess.run(cmd, stdout=sys.stdout, stderr=sys.stderr)
+    print("=" * 70)
+    print("OFF-POLICY TRAINING (official components)")
+    print("=" * 70)
+    print(f"  NUM_TOKENS (cache size): {NUM_TOKENS}")
+    print(f"  lr: 0.02")
+    print(f"  epochs: 2")
+    print(f"  global_batch_size: 32")
+    print(f"  generate_eval_every_n_steps: 50")
+    print("=" * 70)
     
-    # Copy results to our volume for comparison
-    import shutil
-    import json
-    results_dir = os.environ.get("CARTRIDGES_OUTPUT_DIR", "/results")
+    # Build config - same as theirs but with eval every 50 steps
+    config = TrainConfig(
+        model=HFModelConfig(
+            pretrained_model_name_or_path="meta-llama/Llama-3.2-3B-Instruct",
+            model_cls=FlexLlamaForCausalLM,
+        ),
+        kv_cache_initializer=KVFromText.Config(max_tokens=NUM_TOKENS),
+        
+        lr=2e-2,
+        epochs=2,
+        global_batch_size=32,
+        
+        dataset=TrainDataset.Config(
+            data_sources=[DataSource(path=source, type="hf") for source in data_sources],
+            top_k_logits=20,
+            packed_seq_length=2048,
+            packing_mode="truncate",
+        ),
+        
+        save_every_n_steps=50,
+        generate_eval_every_n_steps=50,  # Changed from 128 to 50
+        generate_evals=[
+            GenerationEvalConfig(
+                dataset=LongHealthMultipleChoiceGenerateDataset.Config(
+                    patient_ids=patient_ids,
+                ),
+                name_for_wandb=f"longhealth_p{NUM_PATIENTS}",
+                generate_max_new_tokens=512,
+                batch_size=32,
+                temperature=0.3,
+            )
+        ],
+        distributed_backend="gloo",
+        wandb=WandBConfig(tags=["train", "longhealth", "offpolicy"]),
+        output_dir="/results/offpolicy",
+        name="offpolicy_compare",
+    )
     
-    # Find the output directory (their code creates timestamped dirs)
-    for item in os.listdir(results_dir):
-        item_path = os.path.join(results_dir, item)
-        if os.path.isdir(item_path) and "longhealth" in item:
-            # Copy to our expected location
-            os.makedirs("/results/offpolicy", exist_ok=True)
-            for f in os.listdir(item_path):
-                src = os.path.join(item_path, f)
-                dst = os.path.join("/results/offpolicy", f)
-                if os.path.isfile(src):
-                    shutil.copy2(src, dst)
-                elif os.path.isdir(src):
-                    if os.path.exists(dst):
-                        shutil.rmtree(dst)
-                    shutil.copytree(src, dst)
-            print(f"Copied results from {item_path} to /results/offpolicy")
+    # Run training with step 0 eval
+    print("Running training with pydrantic...")
+    pydrantic.main(config, ["--generate_eval_at_step_0"])
     
     results_volume.commit()
-    return result.returncode
+    print("Training complete!")
+    return 0
 
 
 @app.local_entrypoint()
 def main():
     print("=" * 70)
-    print("OFFICIAL OFF-POLICY TRAINING")
-    print("Running exact cartridges longhealth_train.py")
+    print("OFF-POLICY TRAINING")
+    print("Using official cartridges components with eval every 50 steps")
     print("=" * 70)
     
     exit_code = train.remote()
