@@ -546,14 +546,13 @@ def train_offpolicy(
     from cartridges.datasets import llama3_messages_to_element
     
     train_elements = []
-    precomputed_gen_tokens = 0  # Track tokens that "cost" to generate the pre-computed data
+    total_seq_tokens = 0
     for convo in conversations:
         elem = llama3_messages_to_element(convo.messages, retokenize=False, tokenizer=tokenizer)
         train_elements.append(elem)
-        # Count the full sequence length - this is what it would cost to generate
-        precomputed_gen_tokens += len(elem.input_ids)
+        total_seq_tokens += len(elem.input_ids)
     logger.info(f"Converted {len(train_elements)} elements for training")
-    logger.info(f"Pre-computed generation tokens (fair cost): {precomputed_gen_tokens:,}")
+    logger.info(f"Total sequence tokens in dataset: {total_seq_tokens:,} ({total_seq_tokens/len(train_elements):.1f} avg/sample)")
     
     # Shuffle for training
     np.random.seed(42)
@@ -616,9 +615,9 @@ def train_offpolicy(
     
     eval_results = []
     total_tokens = 0
-    # Track average tokens per sample for fair generation cost estimation
-    avg_tokens_per_sample = precomputed_gen_tokens / len(train_elements)
-    logger.info(f"Avg tokens per sample: {avg_tokens_per_sample:.1f} (for fair generation cost)")
+    # For fair comparison: count total sequence tokens (same metric as on-policy)
+    # This represents the total "training data" in tokens
+    logger.info(f"Token counting: sequence length per sample (fair comparison)")
     token_history = []
     
     # Step 0 evaluation
@@ -717,10 +716,10 @@ def train_offpolicy(
             element_ids = torch.cat([element_ids, torch.zeros(pad_len, dtype=torch.long)])
             position_ids = torch.cat([position_ids, torch.zeros(pad_len, dtype=torch.long)])
         
-        # Track tokens: generation cost (what it would cost to generate these samples) + training
-        # For fair comparison with on-policy which counts generation tokens
-        batch_gen_tokens = len(batch_elements) * int(avg_tokens_per_sample)  # generation cost
-        total_tokens += batch_gen_tokens + curr_offset  # gen + train
+        # Track tokens: total sequence length per sample (fair comparison with on-policy)
+        # On-policy counts doc + prompt + response per sample, we count input_ids length
+        batch_seq_tokens = sum(len(elem.input_ids) for elem in batch_elements)
+        total_tokens += batch_seq_tokens
         
         if topk_ids_list:
             # Flatten to 1D for indexing (these are already 1D from cartridges)
