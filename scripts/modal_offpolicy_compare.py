@@ -157,52 +157,63 @@ def train():
         name="offpolicy_compare",
     )
     
-    # Wrap stdout to intercept ALL output (tqdm + logging both go to stdout)
+    # Capture evals via logging handler (logger goes to stdout but we need to intercept)
     import re
     import sys
+    import logging
 
     EVALS_PATH = "/results/offpolicy/evals.json"
     os.makedirs("/results/offpolicy", exist_ok=True)
     evals = []
+    current_step = [0]  # Use list to allow mutation in nested function
 
-    class EvalCapture:
-        """Wraps stdout, tracks step from tqdm lines, saves score to JSON."""
+    class EvalCaptureHandler(logging.Handler):
+        """Logging handler that captures eval scores."""
+        def emit(self, record):
+            try:
+                msg = self.format(record)
+                # Capture score: {'generate_longhealth_p10/score': np.float64(0.28)}
+                if 'score' in msg and 'float' in msg:
+                    m = re.search(r'float\w*\(([\d.]+)\)', msg)
+                    if m:
+                        score = float(m.group(1))
+                        step = current_step[0]
+                        entry = {"step": step, "accuracy": round(score * 100, 1)}
+                        if not any(e["step"] == step for e in evals):
+                            evals.append(entry)
+                            with open(EVALS_PATH, 'w') as f:
+                                json.dump({"evals": evals}, f, indent=2)
+                            results_volume.commit()
+                            print(f"\n✓ EVAL SAVED — step={step}, accuracy={score*100:.1f}%\n", flush=True)
+            except Exception as e:
+                print(f"EvalCaptureHandler error: {e}", flush=True)
+
+    # Add handler to cartridges.train logger
+    eval_handler = EvalCaptureHandler()
+    eval_handler.setLevel(logging.INFO)
+    logging.getLogger("cartridges.train").addHandler(eval_handler)
+    logging.getLogger().addHandler(eval_handler)  # root logger too
+
+    # Also wrap stdout/stderr to track step from tqdm progress bars
+    class StepTracker:
         def __init__(self, wrapped):
             self.wrapped = wrapped
-            self.current_step = None
-
         def write(self, text):
             self.wrapped.write(text)
-            self.wrapped.flush()
-            # Track step from tqdm: "Generating [step=0]"
-            m = re.search(r'step=(\d+)', text)
+            # Track step from tqdm: "Generating [step=0]" or "optimizer_step=50"
+            m = re.search(r'step[=\]](\d+)', text)
             if m:
-                self.current_step = int(m.group(1))
-            # Capture score: {'generate_longhealth_p10/score': np.float64(0.28)}
-            if 'score' in text and 'float' in text:
-                m2 = re.search(r'float\w*\(([\d.]+)\)', text)
-                if m2 and self.current_step is not None:
-                    score = float(m2.group(1))
-                    entry = {"step": self.current_step, "accuracy": round(score * 100, 1)}
-                    # Avoid duplicates
-                    if not any(e["step"] == self.current_step for e in evals):
-                        evals.append(entry)
-                        with open(EVALS_PATH, 'w') as f:
-                            json.dump({"evals": evals}, f, indent=2)
-                        results_volume.commit()
-                        self.wrapped.write(f"\n✓ EVAL SAVED — step={self.current_step}, accuracy={score*100:.1f}%\n")
-                        self.wrapped.flush()
-
+                current_step[0] = int(m.group(1))
         def flush(self):
             self.wrapped.flush()
-
         def fileno(self):
             return self.wrapped.fileno()
 
-    sys.stdout = EvalCapture(sys.stdout)
+    sys.stdout = StepTracker(sys.stdout)
+    sys.stderr = StepTracker(sys.stderr)
 
     # Run training (step 0 eval happens automatically since 0 % 50 == 0)
-    print("Running training with pydrantic...")
+    print("Running training with pydrantic...", flush=True)
     pydrantic.main(config)
 
     results_volume.commit()
