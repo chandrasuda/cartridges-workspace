@@ -86,7 +86,7 @@ def train(total_steps: int = 1000, batch_size: int = 4, lr: float = 0.005, eval_
 
     cmd = [
         sys.executable, "/opt/workspace/scripts/local_offpolicy_train.py",
-        "--model", "meta-llama/Llama-3.1-8B-Instruct",
+        "--model", "meta-llama/Llama-3.2-3B-Instruct",
         "--hf-shard-dir", data_dir,
         "--num-tokens", "512",
         "--lr", str(lr),
