@@ -9,7 +9,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v82-fix-cache-init"
+WORKSPACE_VERSION = "v83-fix-patient-doc-ids"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 

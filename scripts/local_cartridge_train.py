@@ -526,6 +526,33 @@ def train(
     logger.info(f"  - Generated init text: {len(init_text):,} chars using LongHealthResource.to_string()")
     logger.info(f"  - Format: <patient-record-X> with name, birthday, diagnosis, structured notes")
     
+    # Build patient_doc_ids: tokenized document for each patient (for teacher top-k)
+    FULL_DOC_TEMPLATE = """<patient-record-{patient_id}>
+Name: {name}
+Birthday: {birthday}
+Diagnosis: {diagnosis}
+Number of Notes: {num_notes}
+
+<notes>
+{notes}
+</notes>
+</patient-record-{patient_id}>"""
+    
+    patient_doc_ids = {}
+    for patient in resource.patients:
+        notes = "\n".join([f"<{note_id}>\n{text}\n</{note_id}>" for note_id, text in patient.texts.items()])
+        doc_text = FULL_DOC_TEMPLATE.format(
+            name=patient.name,
+            patient_id=patient.patient_id,
+            birthday=patient.birthday,
+            diagnosis=patient.diagnosis,
+            num_notes=len(patient.texts),
+            notes=notes,
+        )
+        doc_ids = tokenizer.encode(doc_text, add_special_tokens=False)
+        patient_doc_ids[patient.patient_id] = doc_ids
+    logger.info(f"  - Built patient_doc_ids for {len(patient_doc_ids)} patients (for teacher top-k)")
+    
     # Write to temp file for KVFromText initializer
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
         f.write(init_text)
