@@ -198,41 +198,51 @@ def evaluate_cache(
 
 
 def generate_batch_local(model, tokenizer, cache, prompt_ids_list, max_tokens, temperature, device):
-    """Generate responses locally using flex_generate."""
-    logger.debug(f"generate_batch_local: Starting generation for {len(prompt_ids_list)} prompts")
-    logger.debug(f"  - max_tokens: {max_tokens}, temperature: {temperature}, device: {device}")
-    
-    responses = []
-    
+    """Generate responses for all prompts in a single batched flex_generate call."""
+    logger.debug(f"generate_batch_local: Batched generation for {len(prompt_ids_list)} prompts")
+
+    # Concatenate all prompts with seq_ids to distinguish sequences (flex_generate supports this natively)
+    all_input_ids, all_seq_ids, all_position_ids = [], [], []
     for idx, prompt_ids in enumerate(prompt_ids_list):
-        logger.debug(f"  - Generating response {idx+1}/{len(prompt_ids_list)}, prompt length: {len(prompt_ids)}")
-        
-        input_ids = torch.tensor(prompt_ids, dtype=torch.long, device=device)
-        seq_ids = torch.zeros_like(input_ids)
-        position_ids = torch.arange(len(input_ids), dtype=torch.long, device=device)
-        
-        cache.clear()
-        
-        try:
-            output = flex_generate(
-                model=model,
-                tokenizer=tokenizer,
-                cache=cache,
-                input_ids=input_ids,
-                seq_ids=seq_ids,
-                position_ids=position_ids,
-                max_new_tokens=max_tokens,
-                temperature=temperature,
-            )
-            
-            response_ids = output.get(0, [])
-            responses.append(list(response_ids))
-            logger.debug(f"    - Generated {len(response_ids)} tokens")
-        except Exception as e:
-            logger.error(f"    - Generation failed: {e}")
-            responses.append([])
-    
-    logger.debug(f"generate_batch_local: Completed. {sum(1 for r in responses if r)} successful responses")
+        ids = torch.tensor(prompt_ids, dtype=torch.long, device=device)
+        all_input_ids.append(ids)
+        all_seq_ids.append(torch.full((len(ids),), idx, dtype=torch.long, device=device))
+        all_position_ids.append(torch.arange(len(ids), dtype=torch.long, device=device))
+
+    input_ids = torch.cat(all_input_ids)
+    seq_ids = torch.cat(all_seq_ids)
+    position_ids = torch.cat(all_position_ids)
+
+    cache.clear()
+    try:
+        output = flex_generate(
+            model=model,
+            tokenizer=tokenizer,
+            cache=cache,
+            input_ids=input_ids,
+            seq_ids=seq_ids,
+            position_ids=position_ids,
+            max_new_tokens=max_tokens,
+            temperature=temperature,
+        )
+        responses = [list(output.get(i, [])) for i in range(len(prompt_ids_list))]
+        logger.debug(f"  - Batched generation done. {sum(1 for r in responses if r)} non-empty")
+    except Exception as e:
+        logger.error(f"  - Batched generation failed: {e}, falling back to sequential")
+        responses = []
+        for idx, prompt_ids in enumerate(prompt_ids_list):
+            ids = torch.tensor(prompt_ids, dtype=torch.long, device=device)
+            cache.clear()
+            try:
+                out = flex_generate(model=model, tokenizer=tokenizer, cache=cache,
+                                    input_ids=ids, seq_ids=torch.zeros_like(ids),
+                                    position_ids=torch.arange(len(ids), dtype=torch.long, device=device),
+                                    max_new_tokens=max_tokens, temperature=temperature)
+                responses.append(list(out.get(0, [])))
+            except Exception as e2:
+                logger.error(f"    - Sequential fallback failed for prompt {idx}: {e2}")
+                responses.append([])
+
     return responses
 
 
