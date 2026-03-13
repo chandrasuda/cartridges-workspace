@@ -142,9 +142,9 @@ def train():
         name="offpolicy_compare",
     )
     
-    # Run training with step 0 eval
+    # Run training (step 0 eval happens automatically since 0 % 50 == 0)
     print("Running training with pydrantic...")
-    pydrantic.main(config, ["--generate_eval_at_step_0"])
+    pydrantic.main(config)
     
     results_volume.commit()
     print("Training complete!")
