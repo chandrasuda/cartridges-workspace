@@ -73,6 +73,8 @@ from cartridges.data.longhealth.evals import LongHealthMultipleChoiceGenerateDat
 logger.info("  - Imported LongHealthMultipleChoiceGenerateDataset (official eval)")
 from cartridges.data.longhealth.resources import LongHealthResource
 logger.info("  - Imported LongHealthResource (for cache init)")
+from cartridges.initialization.tokenization_utils import MODEL_TO_CHAT_TEMPLATE
+logger.info("  - Imported MODEL_TO_CHAT_TEMPLATE (for consistent eval prompts)")
 logger.info("All cartridges modules imported successfully!")
 
 
@@ -133,12 +135,12 @@ def evaluate_cache(
     device: str,
     step: int,
     max_eval_samples: int = None,
-    temperature: float = 0.3,
+    temperature: float = 0.3,  # Match off-policy exactly (modal_offpolicy_compare.py uses 0.3)
     max_new_tokens: int = 512,
 ) -> dict:
     """
     Evaluate using the official LongHealthMultipleChoiceGenerateDataset.
-    Matches off-policy eval exactly: temperature=0.3, max_new_tokens=512, CoT prompting.
+    Matches off-policy eval exactly: temperature=0.3, max_new_tokens=512, CoT prompting, custom chat template.
     """
     logger.info(f"  [EVAL] Evaluating at step {step} (official LongHealth eval)...")
     eval_t0 = time.time()
@@ -150,11 +152,17 @@ def evaluate_cache(
     correct_count = 0
     total_count = len(questions)
 
+    # Use the same chat template as off-policy eval (MODEL_TO_CHAT_TEMPLATE)
+    chat_template = MODEL_TO_CHAT_TEMPLATE.get(tokenizer.name_or_path, None)
+    if chat_template:
+        logger.debug(f"  Using custom chat template for {tokenizer.name_or_path}")
+    
     for qi, question in enumerate(questions):
         input_ids = tokenizer.apply_chat_template(
             [{"role": "user", "content": question.question}],
             add_generation_prompt=True,
             tokenize=True,
+            chat_template=chat_template,  # Use same template as off-policy!
         )
         ids_t = torch.tensor(input_ids, dtype=torch.long, device=device)
         seq_ids = torch.zeros_like(ids_t)
