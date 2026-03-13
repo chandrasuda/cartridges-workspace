@@ -546,10 +546,14 @@ def train_offpolicy(
     from cartridges.datasets import llama3_messages_to_element
     
     train_elements = []
+    precomputed_gen_tokens = 0  # Track tokens that "cost" to generate the pre-computed data
     for convo in conversations:
         elem = llama3_messages_to_element(convo.messages, retokenize=False, tokenizer=tokenizer)
         train_elements.append(elem)
+        # Count the full sequence length - this is what it would cost to generate
+        precomputed_gen_tokens += len(elem.input_ids)
     logger.info(f"Converted {len(train_elements)} elements for training")
+    logger.info(f"Pre-computed generation tokens (fair cost): {precomputed_gen_tokens:,}")
     
     # Shuffle for training
     np.random.seed(42)
@@ -611,7 +615,10 @@ def train_offpolicy(
     logger.info(f"  - Log file: {log_file_path}")
     
     eval_results = []
-    total_tokens = 0
+    # Start with pre-computed generation tokens for FAIR comparison with on-policy
+    # On-policy counts generation tokens, so off-policy must too
+    total_tokens = precomputed_gen_tokens
+    logger.info(f"Starting token count at {total_tokens:,} (pre-computed generation cost)")
     token_history = []
     
     # Step 0 evaluation

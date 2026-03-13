@@ -12,7 +12,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v64-lr005-overnight"
+WORKSPACE_VERSION = "v65-fair-token-count"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
