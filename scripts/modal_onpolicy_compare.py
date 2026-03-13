@@ -9,7 +9,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v71-lr02-match-paper"
+WORKSPACE_VERSION = "v74-batch32"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
@@ -58,7 +58,7 @@ app = modal.App("onpolicy-compare", image=image)
     scaledown_window=600,
     volumes={"/results": results_volume},
 )
-def train(total_steps: int = 1000, batch_size: int = 4, lr: float = 0.02, eval_every: int = 50, save_every: int = 50):
+def train(total_steps: int = 1000, batch_size: int = 32, lr: float = 0.02, eval_every: int = 50, save_every: int = 50):
     """Run on-policy training overnight with full eval every N steps."""
     import subprocess, os, sys
 
@@ -91,7 +91,7 @@ def train(total_steps: int = 1000, batch_size: int = 4, lr: float = 0.02, eval_e
 @app.local_entrypoint()
 def main(
     total_steps: int = 1000,
-    batch_size: int = 4,
+    batch_size: int = 32,
     lr: float = 0.02,
     eval_every: int = 50,
     save_every: int = 50,
