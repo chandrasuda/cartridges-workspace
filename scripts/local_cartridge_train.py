@@ -65,16 +65,14 @@ from cartridges.initialization import KVFromText
 logger.info("  - Imported initialization module (KVFromText)")
 from cartridges.models.llama.modeling_llama import FlexLlamaForCausalLM
 logger.info("  - Imported FlexLlamaForCausalLM")
-from cartridges.train import CacheAndModel
-logger.info("  - Imported train module (CacheAndModel)")
+from cartridges.train import CacheAndModel, GenerationEvalConfig, evaluate_generations
+logger.info("  - Imported train module (CacheAndModel, GenerationEvalConfig, evaluate_generations)")
 from cartridges.generation import flex_generate
 logger.info("  - Imported generation module (flex_generate)")
 from cartridges.data.longhealth.evals import LongHealthMultipleChoiceGenerateDataset
 logger.info("  - Imported LongHealthMultipleChoiceGenerateDataset (official eval)")
 from cartridges.data.longhealth.resources import LongHealthResource
 logger.info("  - Imported LongHealthResource (for cache init)")
-from cartridges.initialization.tokenization_utils import MODEL_TO_CHAT_TEMPLATE
-logger.info("  - Imported MODEL_TO_CHAT_TEMPLATE (for consistent eval prompts)")
 logger.info("All cartridges modules imported successfully!")
 
 
@@ -135,73 +133,59 @@ def evaluate_cache(
     device: str,
     step: int,
     max_eval_samples: int = None,
-    temperature: float = 0.3,  # Match off-policy exactly (modal_offpolicy_compare.py uses 0.3)
+    temperature: float = 0.3,
     max_new_tokens: int = 512,
 ) -> dict:
     """
-    Evaluate using the official LongHealthMultipleChoiceGenerateDataset.
-    Matches off-policy eval exactly: temperature=0.3, max_new_tokens=512, CoT prompting, custom chat template.
+    Evaluate using the EXACT same evaluate_generations function as off-policy.
+    This guarantees identical eval code path.
     """
-    logger.info(f"  [EVAL] Evaluating at step {step} (official LongHealth eval)...")
+    logger.info(f"  [EVAL] Evaluating at step {step} (using OFFICIAL evaluate_generations)...")
     eval_t0 = time.time()
 
-    questions = eval_dataset.questions
-    if max_eval_samples is not None:
-        questions = questions[:max_eval_samples]
+    # Build config identical to off-policy (modal_offpolicy_compare.py)
+    eval_config = GenerationEvalConfig(
+        dataset=eval_dataset.config,
+        name_for_wandb="longhealth_p10",
+        generate_max_new_tokens=max_new_tokens,
+        batch_size=32,
+        temperature=temperature,
+    )
 
-    correct_count = 0
-    total_count = len(questions)
+    # Create wrapped model (same as off-policy)
+    wrapped = CacheAndModel(cache, flex_model)
 
-    # Use the same chat template as off-policy eval (MODEL_TO_CHAT_TEMPLATE)
-    chat_template = MODEL_TO_CHAT_TEMPLATE.get(tokenizer.name_or_path, None)
-    if chat_template:
-        logger.debug(f"  Using custom chat template for {tokenizer.name_or_path}")
-    
-    for qi, question in enumerate(questions):
-        input_ids = tokenizer.apply_chat_template(
-            [{"role": "user", "content": question.question}],
-            add_generation_prompt=True,
-            tokenize=True,
-            chat_template=chat_template,  # Use same template as off-policy!
-        )
-        ids_t = torch.tensor(input_ids, dtype=torch.long, device=device)
-        seq_ids = torch.zeros_like(ids_t)
-        position_ids = torch.arange(len(input_ids), dtype=torch.long, device=device)
-
-        cache.clear()
-        try:
-            gen_output = flex_generate(
-                model=flex_model,
-                tokenizer=tokenizer,
-                cache=cache,
-                input_ids=ids_t,
-                seq_ids=seq_ids,
-                position_ids=position_ids,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-            )
-            gen_tokens = gen_output.get(0, [])
-            gen_text = tokenizer.decode(gen_tokens, skip_special_tokens=True)
-        except Exception as e:
-            logger.debug(f"    Eval generation failed for Q{qi}: {e}")
-            gen_text = ""
-
-        is_correct, meta = eval_dataset.score(gen_text, question.correct, question.question_id)
-        if is_correct:
-            correct_count += 1
-
-        if (qi + 1) % 20 == 0:
-            logger.debug(f"    [{qi+1}/{total_count}] running acc={correct_count/(qi+1)*100:.1f}%")
+    # Call the EXACT same function off-policy uses
+    results = evaluate_generations(
+        config=eval_config,
+        model=wrapped,
+        tokenizer=tokenizer,
+        dataset=eval_dataset,
+        optimizer_step=step,
+        local_rank=device,
+        step=step,
+        final=False,
+        log_to_wandb=False,
+    )
 
     eval_elapsed = time.time() - eval_t0
-    accuracy = correct_count / total_count * 100
-    logger.info(f"  [EVAL] Step {step}: {correct_count}/{total_count} = {accuracy:.1f}% ({eval_elapsed:.1f}s)")
+
+    # Extract score from results (same as evaluate_generations does internally)
+    import pandas as pd
+    df = pd.DataFrame(results)
+    score_cols = [col for col in df.columns if col.endswith("score")]
+    accuracy = df[score_cols[0]].mean() * 100 if score_cols else 0.0
+    correct = int(df[score_cols[0]].sum()) if score_cols else 0
+    total = len(df)
+
+    logger.info(f"  [EVAL] Step {step}: {correct}/{total} = {accuracy:.1f}% ({eval_elapsed:.1f}s)")
+    logger.info(f"  step={step}, score={accuracy/100:.4f}")
     cleanup_memory(device)
 
     return {
         "step": step,
-        "correct": correct_count,
-        "total": total_count,
+        "correct": correct,
+        "total": total,
         "accuracy": round(accuracy, 2),
         "eval_time": round(eval_elapsed, 2),
     }

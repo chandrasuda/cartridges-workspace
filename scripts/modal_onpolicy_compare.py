@@ -9,7 +9,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v84-fix-chat-template"
+WORKSPACE_VERSION = "v85-use-official-eval"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
