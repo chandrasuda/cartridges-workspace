@@ -411,7 +411,7 @@ def train(
     save_every: int = 50,
     save_dir: str = "./local_checkpoints",
     max_eval_samples: int = None,
-    max_doc_tokens: int = 4096,
+    max_doc_tokens: int = 16384,
 ):
     logger.info("=" * 70)
     logger.info("STARTING TRAINING")
@@ -890,8 +890,8 @@ if __name__ == "__main__":
                         help="Enable debug logging")
     parser.add_argument("--max-eval-samples", type=int, default=None,
                         help="Limit evaluation to N samples (default: all 200)")
-    parser.add_argument("--max-doc-tokens", type=int, default=4096,
-                        help="Max document tokens for teacher (default: 4096, reduce for MPS memory)")
+    parser.add_argument("--max-doc-tokens", type=int, default=16384,
+                        help="Max document tokens for teacher (default: 16384, reduce for MPS memory)")
     args = parser.parse_args()
 
     # Adjust logging level based on --debug flag
