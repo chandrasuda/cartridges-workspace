@@ -405,7 +405,7 @@ def train(
     lr: float = 0.001,
     total_steps: int = 100,
     batch_size: int = 8,  # Smaller for local
-    max_response_length: int = 512,
+    max_response_length: int = 1024,
     temperature: float = 0.7,
     eval_every: int = 50,
     save_every: int = 50,
