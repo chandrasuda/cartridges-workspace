@@ -405,7 +405,7 @@ def train(
     lr: float = 0.001,
     total_steps: int = 100,
     batch_size: int = 8,  # Smaller for local
-    max_response_length: int = 256,
+    max_response_length: int = 512,
     temperature: float = 0.7,
     eval_every: int = 50,
     save_every: int = 50,
@@ -512,7 +512,7 @@ def train(
     training_patients = sorted(train_df["patient_id"].unique())
     logger.info(f"  - Training patients: {training_patients}")
     
-    # Use OFFICIAL LongHealthResource format (matches off-policy exactly!)
+    # LongHealthResource format 
     resource = LongHealthResource(config=LongHealthResource.Config(patient_ids=training_patients))
     init_text = resource.to_string()
     logger.info(f"  - Generated init text: {len(init_text):,} chars using LongHealthResource.to_string()")

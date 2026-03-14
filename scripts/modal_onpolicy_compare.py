@@ -9,7 +9,7 @@ Usage:
 
 import modal
 
-WORKSPACE_VERSION = "v86-fix-doc-truncation"
+WORKSPACE_VERSION = "v87-fix-response-length"
 GPU = "A100-80GB"
 TIMEOUT_HOURS = 24
 
